@@ -10,7 +10,7 @@ Two processes make up the app. A tray daemon grabs the keypad, plays the remaps,
 
 Source: https://github.com/PikkonMG/opentartarus
 
-**Status: testing.** Version 0.1.0 is an early build, marked as a pre-release on GitHub. It works on the developer's machine with a Tartarus V2. The Tartarus Pro path is built from Razer's specification and has not been tried on a real Pro. The Tartarus V2 Pro key map was recorded from a real V2 Pro. Bug reports are welcome; see CONTRIBUTING.md for what to include.
+**Status: testing.** Version 0.1.0 is an early build, marked as a pre-release on GitHub. It works on the developer's machine with a Tartarus V2. The Tartarus Pro path is built from Razer's specification and has not been tried on a real Pro. The Tartarus V2 Pro key map was recorded from a real V2 Pro, and its keys, stick and profiles were tried on one. Bug reports are welcome; see CONTRIBUTING.md for what to include.
 
 ## What you need
 
@@ -48,9 +48,9 @@ The first time you apply a shipped profile the app copies it into `~/.config/ope
 
 The V2 Pro has 27 keys in rows of 6, 6, 6, 5 and 4, a thumbstick that clicks, and no scroll wheel. The window draws that layout and numbers the keys 01 to 27 along the rows.
 
-On its own the pad sends the left of a keyboard: `` ` `` 1 2 3 4 5, Tab Q W E R T, Caps A S D F G, Shift Z X C V, and Ctrl B I Space. Each of those keys uses the same key slot as the V2 key that sends the same thing, so every shipped profile works on it unchanged. The seven keys the V2 does not have (`` ` ``, T, G, V, Ctrl, B, I) start unbound and keep sending what the pad sends.
+On its own the pad sends the left of a keyboard: `` ` `` 1 2 3 4 5, Tab Q W E R T, Caps A S D F G, Shift Z X C V, and Ctrl B I Space. Each of those keys uses the same key slot as the V2 key that sends the same thing, so a profile made on a V2 still works on it. The seven keys the V2 does not have (`` ` ``, T, G, V, Ctrl, B, I) keep sending what the pad sends until you bind them. The shipped profiles go further and carry a layout of their own for the V2 Pro, described under the profiles above.
 
-The thumbstick shows up in Linux as a game controller. While the active profile binds no stick direction and no stick click, OpenTartarus leaves the controller alone and games see the stick as usual. Bind any of them and OpenTartarus takes the stick over: a direction presses its key once the stick is pushed 40% of the way, and lets go below 30%.
+The thumbstick shows up in Linux as a game controller. While the active profile binds no stick direction and no stick click, OpenTartarus leaves the controller alone and games see the stick as usual. Bind any of them and OpenTartarus takes the stick over: a direction presses its key once the stick is pushed 40% of the way, and lets go below 30%. Every shipped profile binds the stick on the V2 Pro except Path of Exile, which you play with the mouse.
 
 The three thumb buttons and the onboard profile and lighting keys sent nothing to Linux when they were tested, so they are not drawn.
 
