@@ -38,6 +38,7 @@ pub fn method_replaces_engine(method: Method) -> bool {
     matches!(
         method,
         Method::ApplyProfile
+            | Method::SetStickMode
             | Method::SetBinding
             | Method::ClearBinding
             | Method::RevertProfile
@@ -188,6 +189,7 @@ mod tests {
             evdev_ok: true,
             uinput_ok: true,
             grab_conflict: None,
+            stick_rotation_deg: 0,
         }
     }
 

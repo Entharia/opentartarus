@@ -1,15 +1,28 @@
 use evdev::uinput::VirtualDevice;
-use evdev::{AttributeSet, InputEvent, KeyCode, RelativeAxisCode};
+use evdev::{
+    AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputEvent, InputId, KeyCode,
+    RelativeAxisCode, UinputAbsSetup,
+};
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::keymap::{
     modifier_to_evdev, mouse_button_to_evdev, token_to_evdev, BTN_EXTRA, BTN_LEFT, BTN_MIDDLE,
-    BTN_RIGHT, BTN_SIDE, EV_REL, REL_WHEEL,
+    BTN_RIGHT, BTN_SIDE, BTN_THUMBL, BTN_THUMBR, EV_ABS, EV_REL, REL_WHEEL,
 };
 use opentartarus_core::remap::{Emitted, EventSink};
 use opentartarus_core::types::{KeyToken, Modifier, MouseButton};
 
 pub const KEYBOARD_NAME: &str = "OpenTartarus Keyboard";
 pub const MOUSE_NAME: &str = "OpenTartarus Mouse";
+pub const CONTROLLER_NAME: &str = "OpenTartarus Controller";
+/// The virtual controller uses the usual Xbox 360 identity and layout, the
+/// one Linux game input (SDL, Steam, Proton) maps without a config. It must
+/// not use the pad's own Razer id: the daemon would then grab it as a pad.
+const CONTROLLER_ID: (u16, u16, u16) = (0x045e, 0x028e, 0x0110);
+const STICK_MIN: i32 = -32768;
+const STICK_MAX: i32 = 32767;
+const STICK_FUZZ: i32 = 16;
+const STICK_FLAT: i32 = 128;
+const TRIGGER_MAX: i32 = 255;
 const REL_HWHEEL: u16 = 6;
 const KEY_CODE_MIN: u16 = 1;
 const KEY_CODE_MAX: u16 = 255;
@@ -17,6 +30,9 @@ const KEY_CODE_MAX: u16 = 255;
 pub struct UinputSink {
     keyboard: VirtualDevice,
     mouse: VirtualDevice,
+    /// Made the first time a profile hands the stick to games, so a player
+    /// who never does that never sees an extra controller in their games.
+    controller: Option<VirtualDevice>,
 }
 
 impl UinputSink {
@@ -24,14 +40,33 @@ impl UinputSink {
         Ok(Self {
             keyboard: build_keyboard()?,
             mouse: build_mouse()?,
+            controller: None,
         })
+    }
+
+    fn controller(&mut self) -> Option<&mut VirtualDevice> {
+        if self.controller.is_none() {
+            match build_controller() {
+                Ok(device) => self.controller = Some(device),
+                Err(_) => {
+                    crate::log::write(&ErrorCode::Permission.log_line(Some("virtual controller")));
+                    return None;
+                }
+            }
+        }
+        self.controller.as_mut()
     }
 }
 
 impl EventSink for UinputSink {
     fn emit(&mut self, e: Emitted) {
         let event = InputEvent::new(e.ev_type, e.code, e.value);
-        let device = if routes_to_keyboard(&e) {
+        let device = if routes_to_controller(&e) {
+            match self.controller() {
+                Some(device) => device,
+                None => return,
+            }
+        } else if routes_to_keyboard(&e) {
             &mut self.keyboard
         } else {
             &mut self.mouse
@@ -47,6 +82,11 @@ pub fn token_from_evdev(code: u16) -> Option<KeyToken> {
         .iter()
         .copied()
         .find(|token| token_to_evdev(*token) == code)
+}
+
+/// Stick axes and stick buttons only come from analog stick mode.
+fn routes_to_controller(e: &Emitted) -> bool {
+    e.ev_type == EV_ABS || e.code == BTN_THUMBL || e.code == BTN_THUMBR
 }
 
 fn routes_to_keyboard(e: &Emitted) -> bool {
@@ -102,6 +142,52 @@ fn build_mouse() -> Result<VirtualDevice, ErrorCode> {
         .map_err(|_| ErrorCode::Permission)?
         .build()
         .map_err(|_| ErrorCode::Permission)
+}
+
+fn build_controller() -> Result<VirtualDevice, ErrorCode> {
+    let mut buttons = AttributeSet::<KeyCode>::new();
+    for button in [
+        KeyCode::BTN_SOUTH,
+        KeyCode::BTN_EAST,
+        KeyCode::BTN_NORTH,
+        KeyCode::BTN_WEST,
+        KeyCode::BTN_TL,
+        KeyCode::BTN_TR,
+        KeyCode::BTN_SELECT,
+        KeyCode::BTN_START,
+        KeyCode::BTN_MODE,
+        KeyCode::BTN_THUMBL,
+        KeyCode::BTN_THUMBR,
+    ] {
+        buttons.insert(button);
+    }
+    debug_assert_eq!(KeyCode::BTN_THUMBL.0, BTN_THUMBL);
+    debug_assert_eq!(KeyCode::BTN_THUMBR.0, BTN_THUMBR);
+    let stick = AbsInfo::new(0, STICK_MIN, STICK_MAX, STICK_FUZZ, STICK_FLAT, 0);
+    let trigger = AbsInfo::new(0, 0, TRIGGER_MAX, 0, 0, 0);
+    let hat = AbsInfo::new(0, -1, 1, 0, 0, 0);
+    let (vendor, product, version) = CONTROLLER_ID;
+    let mut builder = VirtualDevice::builder()
+        .map_err(|_| ErrorCode::Permission)?
+        .name(CONTROLLER_NAME)
+        .input_id(InputId::new(BusType::BUS_USB, vendor, product, version))
+        .with_keys(&buttons)
+        .map_err(|_| ErrorCode::Permission)?;
+    for (axis, info) in [
+        (AbsoluteAxisCode::ABS_X, stick),
+        (AbsoluteAxisCode::ABS_Y, stick),
+        (AbsoluteAxisCode::ABS_RX, stick),
+        (AbsoluteAxisCode::ABS_RY, stick),
+        (AbsoluteAxisCode::ABS_Z, trigger),
+        (AbsoluteAxisCode::ABS_RZ, trigger),
+        (AbsoluteAxisCode::ABS_HAT0X, hat),
+        (AbsoluteAxisCode::ABS_HAT0Y, hat),
+    ] {
+        builder = builder
+            .with_absolute_axis(&UinputAbsSetup::new(axis, info))
+            .map_err(|_| ErrorCode::Permission)?;
+    }
+    builder.build().map_err(|_| ErrorCode::Permission)
 }
 
 const ALL_KEY_TOKENS: &[KeyToken] = &[

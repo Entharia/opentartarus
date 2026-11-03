@@ -1,4 +1,4 @@
-use crate::app::{App, Message, ProfileRow};
+use crate::app::{App, Message, ProfileRow, StickChoice};
 use crate::keys::COMBO_INPUT_ID;
 use crate::theme;
 use crate::view::widgets::{
@@ -6,11 +6,12 @@ use crate::view::widgets::{
     section_label, surface_container,
 };
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text, text_input, Space,
+    button, column, container, pick_list, row, scrollable, slider, text, text_input, Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
+use opentartarus_core::constants::{STICK_ROTATION_MAX_DEG, STICK_ROTATION_STEP_DEG};
 use opentartarus_core::labels::{bind_label, key_display_name_for, key_position_text_for};
-use opentartarus_core::types::{Action, KeyToken, MouseButton, MouseTarget, ScrollDir};
+use opentartarus_core::types::{Action, KeyToken, MouseButton, MouseTarget, ScrollDir, StickMode};
 
 pub const MOUSE_TARGETS: [(&str, MouseTarget); 7] = [
     (
@@ -339,6 +340,53 @@ fn switch_profile_controls(app: &App) -> Element<'_, Message> {
     .into()
 }
 
+const STICK_CHOICES: [StickChoice; 4] = [
+    StickChoice(StickMode::Keys8),
+    StickChoice(StickMode::Keys4),
+    StickChoice(StickMode::AnalogLeft),
+    StickChoice(StickMode::AnalogRight),
+];
+
+/// How the stick is read (per profile) and how far it is turned (for all
+/// profiles).
+fn stick_controls(app: &App) -> Element<'_, Message> {
+    let mode = pick_list(
+        STICK_CHOICES,
+        Some(StickChoice(app.stick_mode)),
+        Message::StickModePick,
+    )
+    .text_size(theme::TEXT_SMALL)
+    .style(pick_list_style)
+    .menu_style(menu_style)
+    .width(Length::Fill);
+    let rotation = row![
+        slider(
+            -STICK_ROTATION_MAX_DEG..=STICK_ROTATION_MAX_DEG,
+            app.stick_rotation_deg,
+            Message::StickRotationChanged,
+        )
+        .step(STICK_ROTATION_STEP_DEG)
+        .on_release(Message::StickRotationReleased),
+        text(format!("{}°", app.stick_rotation_deg))
+            .size(theme::TEXT_SMALL)
+            .width(Length::Shrink),
+    ]
+    .spacing(theme::SPACE_SM)
+    .align_y(Alignment::Center);
+    let mut panel = column![section_label(theme::LABEL_THUMBSTICK), mode].spacing(theme::SPACE_SM);
+    if app.stick_mode.is_analog() {
+        panel = panel.push(
+            text(theme::STICK_ANALOG_HINT)
+                .size(theme::TEXT_SMALL)
+                .color(theme::COLOR_TEXT_DIM),
+        );
+    }
+    panel
+        .push(section_label(theme::LABEL_STICK_ROTATION))
+        .push(rotation)
+        .into()
+}
+
 pub fn inspector(app: &App) -> Element<'_, Message> {
     let content: Element<'_, Message> = match app.selected_key {
         None => empty_state(app),
@@ -382,6 +430,9 @@ pub fn inspector(app: &App) -> Element<'_, Message> {
             ]
             .spacing(theme::SPACE_MD);
 
+            if app.shows_stick_settings() {
+                panel = panel.push(stick_controls(app));
+            }
             if let Some(macro_action @ Action::Macro { .. }) = &action {
                 panel = panel.push(macro_steps(macro_action));
             }

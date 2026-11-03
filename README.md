@@ -50,7 +50,15 @@ The V2 Pro has 27 keys in rows of 6, 6, 6, 5 and 4, a thumbstick that clicks, an
 
 On its own the pad sends the left of a keyboard: `` ` `` 1 2 3 4 5, Tab Q W E R T, Caps A S D F G, Shift Z X C V, and Ctrl B I Space. Each of those keys uses the same key slot as the V2 key that sends the same thing, so a profile made on a V2 still works on it. The seven keys the V2 does not have (`` ` ``, T, G, V, Ctrl, B, I) keep sending what the pad sends until you bind them. The shipped profiles go further and carry a layout of their own for the V2 Pro, described under the profiles above.
 
-The thumbstick shows up in Linux as a game controller. While the active profile binds no stick direction and no stick click, OpenTartarus leaves the controller alone and games see the stick as usual. Bind any of them and OpenTartarus takes the stick over: a direction presses its key once the stick is pushed 40% of the way, and lets go below 30%. Every shipped profile binds the stick on the V2 Pro except Path of Exile, which you play with the mouse.
+The thumbstick shows up in Linux as a game controller. While the active profile binds no stick direction and no stick click, OpenTartarus leaves the controller alone and games see the stick as usual. Bind any of them and OpenTartarus takes the stick over: a direction presses its key once the stick is pushed 40% of the way, and lets go below 30%. Every shipped profile binds the stick on the V2 Pro except Path of Exile, which you play with the mouse. Synapse on Windows can set the stick to act as the left stick, the right stick or a D-pad, separately for each of the pad's onboard profiles. OpenTartarus reads all three the same way, so a layout keeps working when you switch profiles on the pad.
+
+Select a stick key in the window to set how the stick works. Each profile picks one of four modes:
+
+- **Keys, 8 directions** (the default): each direction presses its key, and a diagonal holds two.
+- **Keys, 4 directions**: only the direction pushed furthest presses its key, like a D-pad.
+- **Analog: left stick** or **Analog: right stick**: games see the stick on a virtual controller called "OpenTartarus Controller", with its full range. Bound directions are ignored in these modes, and an unbound stick click becomes the controller's stick click.
+
+The rotation slider turns the stick in 15° steps, from −180° to 180°. It holds for every profile, so it suits a pad that sits turned on the desk or a hand that pushes the stick at an angle. If pushing the stick away from you moves right, try −90°.
 
 The three thumb buttons and the onboard profile and lighting keys sent nothing to Linux when they were tested, so they are not drawn.
 

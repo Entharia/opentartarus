@@ -9,6 +9,9 @@ pub const REL_WHEEL: u16 = 8;
 
 pub const ABS_X: u16 = 0;
 pub const ABS_Y: u16 = 1;
+/// The right stick's axes. Synapse can set the V2 Pro's stick to send these.
+pub const ABS_RX: u16 = 3;
+pub const ABS_RY: u16 = 4;
 pub const ABS_HAT0X: u16 = 16;
 pub const ABS_HAT0Y: u16 = 17;
 
@@ -18,7 +21,7 @@ const ANALOG_AXIS_MAX: i32 = 255;
 /// The Tartarus V2 Pro's thumbstick is a gamepad (xpad) stick: -32768..=32767
 /// around 0, with up and left negative.
 const GAMEPAD_AXIS_CENTER: i32 = 0;
-const GAMEPAD_AXIS_MAX: i32 = 32767;
+pub const GAMEPAD_AXIS_MAX: i32 = 32767;
 
 const KEY_ESC: u16 = 1;
 const KEY_1: u16 = 2;
@@ -129,6 +132,7 @@ const KEY_RIGHTMETA: u16 = 126;
 const KEY_F24: u16 = 194;
 /// The gamepad's left-stick click. The V2 Pro's thumbstick click sends it.
 pub const BTN_THUMBL: u16 = 317;
+pub const BTN_THUMBR: u16 = 318;
 
 pub const BTN_LEFT: u16 = 272;
 pub const BTN_RIGHT: u16 = 273;
@@ -202,6 +206,8 @@ const V2_PRO_KEYS: &[(KeyId, u16, u16)] = &[
     (KeyId::Kp26, EV_KEY, KEY_B),
     (KeyId::Kp27, EV_KEY, KEY_I),
     (KeyId::StickClick, EV_KEY, BTN_THUMBL),
+    // The click of the stick when Synapse set it to act as the right stick.
+    (KeyId::StickClick, EV_KEY, BTN_THUMBR),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

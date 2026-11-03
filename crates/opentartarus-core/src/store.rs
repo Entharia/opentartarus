@@ -5,9 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AppStateFile {
+    #[serde(default)]
     pub active_profile_id: String,
+    /// How far the thumbstick's directions are turned, in degrees. One
+    /// setting for every profile, because it follows the player's hand.
+    #[serde(default)]
+    pub stick_rotation_deg: i32,
 }
 
 /// Profiles live as `<id>.json`. One constant, used to write the path and to
@@ -151,23 +156,44 @@ pub fn revert_to_shipped(
     write_shipped_copy(paths, shipped_json, id, &revision)
 }
 
-pub fn write_active_id(paths: &Paths, id: &str) -> Result<(), ErrorCode> {
+fn read_state(paths: &Paths) -> Result<AppStateFile, ErrorCode> {
+    if !paths.state_file.exists() {
+        return Ok(AppStateFile::default());
+    }
+    let bytes = fs::read(&paths.state_file).map_err(|_| ErrorCode::Io)?;
+    serde_json::from_slice(&bytes).map_err(|_| ErrorCode::InvalidProfile)
+}
+
+fn write_state(paths: &Paths, state: &AppStateFile) -> Result<(), ErrorCode> {
     ensure_profile_dirs(paths)?;
-    let state = AppStateFile {
-        active_profile_id: id.to_owned(),
-    };
-    let json = serde_json::to_string(&state).map_err(|_| ErrorCode::InvalidProfile)?;
+    let json = serde_json::to_string(state).map_err(|_| ErrorCode::InvalidProfile)?;
     fs::write(&paths.state_file, json).map_err(|_| ErrorCode::Io)
 }
 
+pub fn write_active_id(paths: &Paths, id: &str) -> Result<(), ErrorCode> {
+    let mut state = read_state(paths).unwrap_or_default();
+    state.active_profile_id = id.to_owned();
+    write_state(paths, &state)
+}
+
 pub fn read_active_id(paths: &Paths) -> Result<Option<String>, ErrorCode> {
-    if !paths.state_file.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(&paths.state_file).map_err(|_| ErrorCode::Io)?;
-    let state: AppStateFile =
-        serde_json::from_slice(&bytes).map_err(|_| ErrorCode::InvalidProfile)?;
-    Ok(Some(state.active_profile_id))
+    let state = read_state(paths)?;
+    Ok(Some(state.active_profile_id).filter(|id| !id.is_empty()))
+}
+
+pub fn write_stick_rotation(paths: &Paths, degrees: i32) -> Result<(), ErrorCode> {
+    let mut state = read_state(paths).unwrap_or_default();
+    state.stick_rotation_deg = degrees;
+    write_state(paths, &state)
+}
+
+/// The saved stick rotation, or none if the file is missing or unreadable.
+pub fn read_stick_rotation(paths: &Paths) -> i32 {
+    read_state(paths)
+        .map(|state| state.stick_rotation_deg)
+        .ok()
+        .filter(|deg| crate::validate::valid_stick_rotation(*deg))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -185,6 +211,39 @@ mod tests {
         let root = std::env::temp_dir().join(format!("opentartarus-store-{n}"));
         fs::create_dir_all(&root).unwrap();
         Paths::from_dirs(root.join("cfg"), root.join("run"), root.join("state"))
+    }
+
+    #[test]
+    fn the_stick_rotation_and_the_active_profile_share_the_state_file() {
+        let paths = tmp_paths();
+        assert_eq!(read_stick_rotation(&paths), 0, "nothing saved yet");
+        assert_eq!(read_active_id(&paths).unwrap(), None);
+        write_stick_rotation(&paths, 45).unwrap();
+        assert_eq!(
+            read_active_id(&paths).unwrap(),
+            None,
+            "a rotation alone is no profile"
+        );
+        write_active_id(&paths, "deadlock").unwrap();
+        assert_eq!(
+            read_stick_rotation(&paths),
+            45,
+            "kept when the profile changes"
+        );
+        write_stick_rotation(&paths, -90).unwrap();
+        assert_eq!(read_active_id(&paths).unwrap().as_deref(), Some("deadlock"));
+        assert_eq!(read_stick_rotation(&paths), -90);
+        // A file from before the setting existed still reads.
+        fs::write(&paths.state_file, r#"{"active_profile_id":"dota-2"}"#).unwrap();
+        assert_eq!(read_stick_rotation(&paths), 0);
+        assert_eq!(read_active_id(&paths).unwrap().as_deref(), Some("dota-2"));
+        // A hand-edited value the app would not accept is ignored.
+        fs::write(
+            &paths.state_file,
+            r#"{"active_profile_id":"x","stick_rotation_deg":7}"#,
+        )
+        .unwrap();
+        assert_eq!(read_stick_rotation(&paths), 0);
     }
 
     const SHIPPED: &str = r#"{

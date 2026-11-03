@@ -14,6 +14,7 @@ use iced::window::{self, Mode};
 use iced::{event, Event, Subscription, Task, Theme};
 use opentartarus_core::constants::{
     HOLD_REPEAT_RATE_DEFAULT_MS, MACRO_MAX_DELAY_MS, MACRO_MAX_STEPS, RECORD_TIMEOUT_MS,
+    STICK_ROTATION_MAX_DEG,
 };
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::{EventMethod, Method, WireError};
@@ -22,7 +23,7 @@ use opentartarus_core::paths::Paths;
 use opentartarus_core::store;
 use opentartarus_core::types::{
     Action, DeviceModel, Edge, KeyId, KeyToken, Lighting, LightingEffect, MacroKind, MacroStep,
-    Modifier, MouseTarget, Profile,
+    Modifier, MouseTarget, Profile, StickMode,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -115,6 +116,11 @@ pub enum Message {
     LightingEffect(EffectChoice),
     LightingBrightness(u8),
     LightingColor(usize, u8),
+    /// Sets how the active profile reads the thumbstick.
+    StickModePick(StickChoice),
+    /// Moves the rotation slider; sent to the daemon on release.
+    StickRotationChanged(i32),
+    StickRotationReleased,
     RevertProfile,
     FixPermissions,
     FixPermissionsDone(FixPermissionsOutcome),
@@ -216,6 +222,10 @@ pub struct App {
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
+    /// How the active profile reads the thumbstick.
+    pub stick_mode: StickMode,
+    /// How far the stick is turned, the same for every profile.
+    pub stick_rotation_deg: i32,
 }
 
 impl Default for App {
@@ -253,6 +263,8 @@ impl Default for App {
             hovered_key: None,
             lighting_saved: false,
             new_profile_name: None,
+            stick_mode: StickMode::default(),
+            stick_rotation_deg: 0,
         }
     }
 }
@@ -509,6 +521,28 @@ impl App {
                 self.lighting.color = Some(rgb);
                 self.send_lighting();
                 self.lighting_saved = true;
+                Task::none()
+            }
+            Message::StickModePick(StickChoice(mode)) => {
+                self.stick_mode = mode;
+                if let Some(id) = self.profile_id() {
+                    self.send(
+                        Method::SetStickMode,
+                        json!({ "profile_id": id, "mode": mode }),
+                    );
+                }
+                Task::none()
+            }
+            Message::StickRotationChanged(degrees) => {
+                self.stick_rotation_deg =
+                    degrees.clamp(-STICK_ROTATION_MAX_DEG, STICK_ROTATION_MAX_DEG);
+                Task::none()
+            }
+            Message::StickRotationReleased => {
+                self.send(
+                    Method::SetStickRotation,
+                    json!({ "degrees": self.stick_rotation_deg }),
+                );
                 Task::none()
             }
             Message::RevertProfile => {
@@ -851,6 +885,7 @@ impl App {
             | Some(Method::RevertProfile)
             | Some(Method::CreateProfile)
             | Some(Method::SetBinding)
+            | Some(Method::SetStickMode)
             | Some(Method::ClearBinding)
             | Some(Method::SetLighting) => {
                 if let Some(id) = result.get("id").and_then(Value::as_str) {
@@ -979,6 +1014,13 @@ impl App {
             self.active_profile_id = Some(id.to_string());
             self.load_profile(id);
         }
+        if let Some(degrees) = result
+            .get("stick")
+            .and_then(|v| v.get("rotation_deg"))
+            .and_then(Value::as_i64)
+        {
+            self.stick_rotation_deg = degrees as i32;
+        }
         self.recording = result
             .get("record")
             .and_then(|v| v.get("active"))
@@ -1064,6 +1106,7 @@ impl App {
             self.bindings = profile.layout(self.model).clone();
             self.lighting = profile.lighting;
             self.setup_note = profile.setup_note;
+            self.stick_mode = profile.stick_mode;
         }
     }
 
@@ -1138,6 +1181,31 @@ pub struct EffectChoice(pub LightingEffect);
 impl std::fmt::Display for EffectChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(effect_name(self.0))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StickChoice(pub StickMode);
+
+impl std::fmt::Display for StickChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            StickMode::Keys8 => theme::STICK_MODE_KEYS8,
+            StickMode::Keys4 => theme::STICK_MODE_KEYS4,
+            StickMode::AnalogLeft => theme::STICK_MODE_ANALOG_LEFT,
+            StickMode::AnalogRight => theme::STICK_MODE_ANALOG_RIGHT,
+        })
+    }
+}
+
+impl App {
+    /// Whether the inspector shows the thumbstick settings: a stick key is
+    /// selected on a pad that has a stick.
+    pub fn shows_stick_settings(&self) -> bool {
+        match (self.selected_key, self.model) {
+            (Some(key), Some(model)) => key.is_stick() && model.has_key(key),
+            _ => false,
+        }
     }
 }
 
@@ -1820,6 +1888,65 @@ mod tests {
         });
         assert_eq!(app.profiles.len(), 1);
         assert_eq!(app.profiles[0].color, None);
+    }
+
+    #[test]
+    fn stick_settings_show_only_for_a_stick_key_on_a_pad_with_a_stick() {
+        let mut app = running_app();
+        app.selected_key = Some(KeyId::AnalogUp);
+        assert!(!app.shows_stick_settings(), "no model known yet");
+        app.model = Some(DeviceModel::V2Pro);
+        assert!(app.shows_stick_settings());
+        app.selected_key = Some(KeyId::StickClick);
+        assert!(app.shows_stick_settings());
+        app.selected_key = Some(KeyId::Kp01);
+        assert!(!app.shows_stick_settings());
+        app.selected_key = Some(KeyId::AnalogUp);
+        app.model = Some(DeviceModel::Pro);
+        assert_eq!(
+            app.shows_stick_settings(),
+            DeviceModel::Pro.has_key(KeyId::AnalogUp)
+        );
+    }
+
+    #[test]
+    fn the_stick_mode_goes_to_the_profile_and_the_rotation_on_release() {
+        let (tx, mut rx) = mpsc::unbounded();
+        let mut app = running_app();
+        app.ipc_tx = Some(tx);
+        app.active_profile_id = Some("default".into());
+
+        let _ = app.update(Message::StickModePick(StickChoice(StickMode::Keys4)));
+        let outgoing = rx.try_recv().unwrap();
+        assert_eq!(outgoing.method, Method::SetStickMode);
+        assert_eq!(outgoing.params["profile_id"], "default");
+        assert_eq!(outgoing.params["mode"], "keys4");
+        assert_eq!(app.stick_mode, StickMode::Keys4);
+
+        let _ = app.update(Message::StickRotationChanged(-90));
+        assert!(rx.try_recv().is_err(), "dragging sends nothing");
+        let _ = app.update(Message::StickRotationChanged(500));
+        assert_eq!(app.stick_rotation_deg, 180, "clamped to the slider's range");
+        let _ = app.update(Message::StickRotationChanged(-90));
+        let _ = app.update(Message::StickRotationReleased);
+        let outgoing = rx.try_recv().unwrap();
+        assert_eq!(outgoing.method, Method::SetStickRotation);
+        assert_eq!(outgoing.params["degrees"], -90);
+    }
+
+    #[test]
+    fn status_carries_the_stick_rotation() {
+        let mut app = running_app();
+        let _ = app.update(Message::IpcResponse {
+            method: Some(Method::GetStatus),
+            ok: true,
+            result: Some(json!({
+                "device": { "present": true, "model": "v2pro" },
+                "stick": { "rotation_deg": -90 },
+            })),
+            error: None,
+        });
+        assert_eq!(app.stick_rotation_deg, -90);
     }
 
     #[test]

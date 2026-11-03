@@ -207,7 +207,11 @@ fn after_request<L: LightingClient>(
             );
         }
         Some(
-            Method::SetBinding | Method::ClearBinding | Method::SetLighting | Method::RevertProfile,
+            Method::SetBinding
+            | Method::ClearBinding
+            | Method::SetLighting
+            | Method::RevertProfile
+            | Method::SetStickMode,
         ) if ok => {
             if let Some(id) = value.pointer("/result/id").and_then(Value::as_str) {
                 emit_event(events, EventMethod::ProfileApplied, json!({ "id": id }));
@@ -357,6 +361,7 @@ mod tests {
             evdev_ok: true,
             uinput_ok: true,
             grab_conflict: None,
+            stick_rotation_deg: 0,
         }
     }
 

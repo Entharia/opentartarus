@@ -520,6 +520,38 @@ pub enum GameId {
     Custom,
 }
 
+/// What the thumbstick does, chosen per profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StickMode {
+    /// Each direction presses its key. A diagonal holds two.
+    #[default]
+    Keys8,
+    /// Only the direction pushed furthest presses its key.
+    Keys4,
+    /// Games get the stick as the left stick of a virtual controller.
+    AnalogLeft,
+    /// Games get the stick as the right stick of a virtual controller.
+    AnalogRight,
+}
+
+impl StickMode {
+    pub const ALL: [StickMode; 4] = [
+        StickMode::Keys8,
+        StickMode::Keys4,
+        StickMode::AnalogLeft,
+        StickMode::AnalogRight,
+    ];
+
+    pub fn is_analog(self) -> bool {
+        matches!(self, Self::AnalogLeft | Self::AnalogRight)
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ProfileDe {
     id: String,
@@ -529,6 +561,8 @@ struct ProfileDe {
     bindings: BTreeMap<String, Action>,
     #[serde(default)]
     model_bindings: BTreeMap<DeviceModel, BTreeMap<String, Action>>,
+    #[serde(default)]
+    stick_mode: StickMode,
     lighting: Lighting,
     #[serde(default)]
     setup_note: Option<String>,
@@ -550,6 +584,10 @@ pub struct Profile {
     /// model without an entry here uses `bindings`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_bindings: BTreeMap<DeviceModel, BTreeMap<KeyId, Action>>,
+    /// What the thumbstick does with this profile. Rotation is not here: it
+    /// is about the player's hand, so it is one setting for every profile.
+    #[serde(default, skip_serializing_if = "StickMode::is_default")]
+    pub stick_mode: StickMode,
     pub lighting: Lighting,
     /// A one-line step the player must take in the game before this layout
     /// works, such as adding a second key for an action that defaults to a
@@ -595,6 +633,7 @@ impl From<ProfileDe> for Profile {
             device_models: raw.device_models,
             bindings,
             model_bindings,
+            stick_mode: raw.stick_mode,
             lighting: raw.lighting,
             setup_note: raw.setup_note,
             shipped_revision: raw.shipped_revision,

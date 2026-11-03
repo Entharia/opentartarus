@@ -9,13 +9,13 @@ use opentartarus_core::record::{RecordOutcome, Recorder};
 use opentartarus_core::remap::RemapEngine;
 use opentartarus_core::store::{
     copy_on_apply, delete_user_profile, list_user_profile_ids, read_user_profile,
-    revert_to_shipped, write_active_id, write_profile,
+    revert_to_shipped, write_active_id, write_profile, write_stick_rotation,
 };
 use opentartarus_core::types::{
     Action, DeviceModel, GameId, KeyId, KeyToken, Lighting, Modifier, MouseButton, MouseTarget,
-    Profile, ProfileSwitch, ScrollDir,
+    Profile, ProfileSwitch, ScrollDir, StickMode,
 };
-use opentartarus_core::validate::profile_id_for_name;
+use opentartarus_core::validate::{profile_id_for_name, valid_stick_rotation};
 use serde_json::{json, Value};
 
 const PROFILE_SOURCE_USER: &str = "user";
@@ -34,6 +34,8 @@ pub struct DaemonState<L: LightingClient> {
     pub evdev_ok: bool,
     pub uinput_ok: bool,
     pub grab_conflict: Option<String>,
+    /// The thumbstick rotation, kept here so a fresh engine gets it too.
+    pub stick_rotation_deg: i32,
 }
 
 pub fn handle_request<L: LightingClient>(
@@ -57,6 +59,8 @@ pub fn handle_request<L: LightingClient>(
         Method::DeleteProfile => delete_profile(state, &params),
         Method::ShowWindow => Ok(json!({})),
         Method::QuitDaemon => Ok(json!({ "stopping": true })),
+        Method::SetStickMode => set_stick_mode(state, &params),
+        Method::SetStickRotation => set_stick_rotation(state, &params),
     }
 }
 
@@ -108,6 +112,7 @@ fn get_status<L: LightingClient>(state: &DaemonState<L>) -> Value {
             "evdev": state.evdev_ok,
         },
         "grab_conflict": state.grab_conflict,
+        "stick": { "rotation_deg": state.stick_rotation_deg },
     })
 }
 
@@ -284,6 +289,36 @@ fn clear_binding<L: LightingClient>(
     profile.layout_mut(state.model).remove(&key_id);
     persist_profile(state, &mut profile, false)?;
     Ok(json!({ "id": profile_id }))
+}
+
+fn set_stick_mode<L: LightingClient>(
+    state: &mut DaemonState<L>,
+    params: &Value,
+) -> Result<Value, ErrorCode> {
+    let profile_id = require_string(params, "profile_id")?;
+    let mode: StickMode =
+        serde_json::from_value(params.get("mode").cloned().unwrap_or(Value::Null))
+            .map_err(|_| ErrorCode::InvalidProfile)?;
+    let mut profile = load_user_copy(state, &profile_id)?;
+    profile.stick_mode = mode;
+    persist_profile(state, &mut profile, false)?;
+    Ok(json!({ "id": profile_id }))
+}
+
+fn set_stick_rotation<L: LightingClient>(
+    state: &mut DaemonState<L>,
+    params: &Value,
+) -> Result<Value, ErrorCode> {
+    let degrees = params
+        .get("degrees")
+        .and_then(Value::as_i64)
+        .and_then(|d| i32::try_from(d).ok())
+        .filter(|d| valid_stick_rotation(*d))
+        .ok_or(ErrorCode::InvalidProfile)?;
+    write_stick_rotation(&state.paths, degrees)?;
+    state.stick_rotation_deg = degrees;
+    state.engine.set_stick_rotation(degrees);
+    Ok(json!({ "degrees": degrees }))
 }
 
 fn start_record<L: LightingClient>(
@@ -516,6 +551,7 @@ mod tests {
             evdev_ok: true,
             uinput_ok: true,
             grab_conflict: None,
+            stick_rotation_deg: 0,
         }
     }
 
@@ -720,6 +756,72 @@ mod tests {
     }
 
     #[test]
+    fn stick_mode_is_saved_per_profile_and_rotation_once_for_all() {
+        use opentartarus_core::store::{read_active_id, read_stick_rotation};
+        let mut st = state();
+        st.model = Some(DeviceModel::V2Pro);
+        st.engine = RemapEngine::new(DeviceModel::V2Pro);
+        handle_request(&mut st, Method::ApplyProfile, json!({"id": "deadlock"}), 0).unwrap();
+        handle_request(
+            &mut st,
+            Method::SetStickMode,
+            json!({"profile_id": "deadlock", "mode": "analog_right"}),
+            1,
+        )
+        .unwrap();
+        let saved = read_user_profile(&st.paths, "deadlock").unwrap();
+        assert_eq!(saved.stick_mode, StickMode::AnalogRight);
+        assert_eq!(
+            st.engine.stick_mode(),
+            StickMode::AnalogRight,
+            "applied live"
+        );
+        assert!(st.engine.binds_stick());
+        let other = load_user_copy(&st, "overwatch-2").unwrap();
+        assert_eq!(
+            other.stick_mode,
+            StickMode::Keys8,
+            "other profiles keep theirs"
+        );
+
+        handle_request(
+            &mut st,
+            Method::SetStickRotation,
+            json!({"degrees": -90}),
+            2,
+        )
+        .unwrap();
+        assert_eq!(get_status(&st)["stick"]["rotation_deg"], -90);
+        assert_eq!(read_stick_rotation(&st.paths), -90);
+        assert_eq!(
+            read_active_id(&st.paths).unwrap().as_deref(),
+            Some("deadlock"),
+            "saving the rotation keeps the active profile"
+        );
+        for bad in [json!({"degrees": 10}), json!({"degrees": 195}), json!({})] {
+            assert_eq!(
+                handle_request(&mut st, Method::SetStickRotation, bad, 3).unwrap_err(),
+                ErrorCode::InvalidProfile
+            );
+        }
+        assert_eq!(
+            read_stick_rotation(&st.paths),
+            -90,
+            "a refused value changes nothing"
+        );
+        assert_eq!(
+            handle_request(
+                &mut st,
+                Method::SetStickMode,
+                json!({"profile_id": "deadlock", "mode": "sideways"}),
+                4,
+            )
+            .unwrap_err(),
+            ErrorCode::InvalidProfile
+        );
+    }
+
+    #[test]
     fn an_edit_on_the_v2_pro_changes_its_own_layout_and_leaves_the_shared_one() {
         let mut st = state();
         st.model = Some(DeviceModel::V2Pro);
@@ -891,6 +993,7 @@ mod tests {
             evdev_ok: true,
             uinput_ok: true,
             grab_conflict: None,
+            stick_rotation_deg: 0,
         };
         let v = handle_request(&mut st, Method::ApplyProfile, json!({"id":"default"}), 0).unwrap();
         assert_eq!(v["id"], "default");

@@ -1,12 +1,15 @@
-use crate::constants::{ANALOG_PRESS_RATIO, ANALOG_RELEASE_RATIO, TAP_HOLD_MS, USB_VID_RAZER};
+use crate::constants::{
+    ANALOG_PRESS_RATIO, ANALOG_RELEASE_RATIO, STICK_FOUR_WAY_SWITCH_RATIO, TAP_HOLD_MS,
+    USB_VID_RAZER,
+};
 use crate::keymap::{
     analog_axis_center, analog_axis_ratio_for, decode_hat, modifier_to_evdev,
-    mouse_button_to_evdev, token_to_evdev, KeyMap, ABS_HAT0X, ABS_HAT0Y, ABS_X, ABS_Y, EV_ABS,
-    EV_KEY, EV_REL, REL_WHEEL,
+    mouse_button_to_evdev, token_to_evdev, KeyMap, ABS_HAT0X, ABS_HAT0Y, ABS_RX, ABS_RY, ABS_X,
+    ABS_Y, BTN_THUMBL, BTN_THUMBR, EV_ABS, EV_KEY, EV_REL, GAMEPAD_AXIS_MAX, REL_WHEEL,
 };
 use crate::types::{
     Action, DeviceModel, Edge, KeyId, MacroKind, MacroStep, MouseTarget, Profile, ProfileSwitch,
-    ScrollDir,
+    ScrollDir, StickMode,
 };
 use std::collections::BTreeMap;
 
@@ -74,6 +77,29 @@ pub struct RemapEngine {
     analog_right: bool,
     analog_up: bool,
     analog_down: bool,
+    stick_mode: StickMode,
+    stick_rotation_deg: i32,
+    /// The last position sent to the virtual controller in analog mode.
+    pad_out: (i32, i32),
+}
+
+/// Turns a stick reading, `x` right and `y` down from -1 to 1, by `degrees`
+/// clockwise as the player sees it. The result is clamped back into the
+/// square the stick reports, since a turned corner reaches past it.
+pub fn rotate_stick(x: f32, y: f32, degrees: i32) -> (f32, f32) {
+    if degrees == 0 {
+        return (x, y);
+    }
+    let (sin, cos) = (degrees as f32).to_radians().sin_cos();
+    (
+        (x * cos - y * sin).clamp(-1.0, 1.0),
+        (x * sin + y * cos).clamp(-1.0, 1.0),
+    )
+}
+
+/// The value a virtual controller axis gets for a stick ratio.
+fn pad_axis_value(ratio: f32) -> i32 {
+    (ratio * GAMEPAD_AXIS_MAX as f32).round() as i32
 }
 
 impl RemapEngine {
@@ -95,17 +121,32 @@ impl RemapEngine {
             analog_right: false,
             analog_up: false,
             analog_down: false,
+            stick_mode: StickMode::default(),
+            stick_rotation_deg: 0,
+            pad_out: (0, 0),
         }
     }
 
     pub fn apply_profile(&mut self, p: &Profile) {
         self.table = p.bindings_for_model(self.model);
+        self.stick_mode = p.stick_mode;
     }
 
-    /// Whether the active profile binds any part of the thumbstick. While it
-    /// does not, the daemon leaves the V2 Pro's gamepad node to games.
+    /// Turns every later stick reading by `degrees`, clockwise.
+    pub fn set_stick_rotation(&mut self, degrees: i32) {
+        self.stick_rotation_deg = degrees;
+    }
+
+    pub fn stick_mode(&self) -> StickMode {
+        self.stick_mode
+    }
+
+    /// Whether the active profile takes the thumbstick over: it binds part
+    /// of it to keys, or hands it to games through the virtual controller.
+    /// While it does neither, the daemon leaves the V2 Pro's gamepad node to
+    /// games as it is.
     pub fn binds_stick(&self) -> bool {
-        self.table.keys().any(|key| key.is_stick())
+        self.stick_mode.is_analog() || self.table.keys().any(|key| key.is_stick())
     }
 
     pub fn has_timed_work(&self) -> bool {
@@ -189,6 +230,10 @@ impl RemapEngine {
         if !allow_grab(ev.vid, ev.pid) {
             return;
         }
+        if self.model == DeviceModel::V2Pro && ev.ev_type == EV_ABS {
+            self.handle_v2_pro_stick(ev, sink, clock);
+            return;
+        }
         if ev.ev_type == EV_ABS && (ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y) {
             self.handle_hat(ev, sink, clock);
             return;
@@ -217,6 +262,28 @@ impl RemapEngine {
         self.dispatch(key_id, ev.value, ev, sink, clock);
     }
 
+    /// Synapse stores a mode for the V2 Pro's stick in each onboard profile:
+    /// left stick (X/Y), right stick (RX/RY) or D-pad (the hat). Whichever
+    /// the active profile uses drives the same four stick directions, so a
+    /// layout keeps working when the player switches profiles on the pad.
+    /// A D-pad direction counts as the stick pushed all the way. Other axes
+    /// (the triggers) are not on the pad and are ignored.
+    fn handle_v2_pro_stick(
+        &mut self,
+        ev: RawEvent,
+        sink: &mut impl EventSink,
+        clock: &mut impl Clock,
+    ) {
+        let (code, value) = match ev.code {
+            ABS_X | ABS_RX => (ABS_X, ev.value),
+            ABS_Y | ABS_RY => (ABS_Y, ev.value),
+            ABS_HAT0X => (ABS_X, ev.value.signum() * GAMEPAD_AXIS_MAX),
+            ABS_HAT0Y => (ABS_Y, ev.value.signum() * GAMEPAD_AXIS_MAX),
+            _ => return,
+        };
+        self.handle_analog(RawEvent { code, value, ..ev }, sink, clock);
+    }
+
     fn handle_hat(&mut self, ev: RawEvent, sink: &mut impl EventSink, clock: &mut impl Clock) {
         if ev.code == ABS_HAT0X {
             self.hat_x = ev.value;
@@ -239,15 +306,99 @@ impl RemapEngine {
     fn handle_analog(&mut self, ev: RawEvent, sink: &mut impl EventSink, clock: &mut impl Clock) {
         if ev.code == ABS_X {
             self.analog_x = ev.value;
-            let ratio = analog_axis_ratio_for(self.model, self.analog_x);
-            self.apply_analog_dir(KeyId::AnalogRight, ratio, ev, sink, clock);
-            self.apply_analog_dir(KeyId::AnalogLeft, -ratio, ev, sink, clock);
         } else {
             self.analog_y = ev.value;
-            let ratio = analog_axis_ratio_for(self.model, self.analog_y);
-            self.apply_analog_dir(KeyId::AnalogDown, ratio, ev, sink, clock);
-            self.apply_analog_dir(KeyId::AnalogUp, -ratio, ev, sink, clock);
         }
+        let (x, y) = rotate_stick(
+            analog_axis_ratio_for(self.model, self.analog_x),
+            analog_axis_ratio_for(self.model, self.analog_y),
+            self.stick_rotation_deg,
+        );
+        match self.stick_mode {
+            StickMode::Keys8 => {
+                self.apply_analog_dir(KeyId::AnalogRight, x, ev, sink, clock);
+                self.apply_analog_dir(KeyId::AnalogLeft, -x, ev, sink, clock);
+                self.apply_analog_dir(KeyId::AnalogDown, y, ev, sink, clock);
+                self.apply_analog_dir(KeyId::AnalogUp, -y, ev, sink, clock);
+            }
+            StickMode::Keys4 => self.apply_four_way(x, y, ev, sink, clock),
+            StickMode::AnalogLeft | StickMode::AnalogRight => self.emit_pad_stick(x, y, sink),
+        }
+    }
+
+    /// 4-way mode: hold only the direction pushed furthest. The held one
+    /// stays until it falls below the release point or another direction is
+    /// pushed clearly further.
+    fn apply_four_way(
+        &mut self,
+        x: f32,
+        y: f32,
+        ev: RawEvent,
+        sink: &mut impl EventSink,
+        clock: &mut impl Clock,
+    ) {
+        let pushes = [
+            (KeyId::AnalogRight, x),
+            (KeyId::AnalogLeft, -x),
+            (KeyId::AnalogDown, y),
+            (KeyId::AnalogUp, -y),
+        ];
+        let (best, best_push) =
+            pushes
+                .into_iter()
+                .fold((KeyId::AnalogUp, f32::MIN), |acc, item| {
+                    if item.1 > acc.1 {
+                        item
+                    } else {
+                        acc
+                    }
+                });
+        let held = pushes.into_iter().find(|(id, _)| analog_pressed(self, *id));
+        let keep = held.filter(|(_, push)| {
+            *push > ANALOG_RELEASE_RATIO && push * STICK_FOUR_WAY_SWITCH_RATIO >= best_push
+        });
+        let next = keep
+            .map(|(id, _)| id)
+            .or_else(|| (best_push >= ANALOG_PRESS_RATIO).then_some(best));
+        let held = held.map(|(id, _)| id);
+        if next == held {
+            return;
+        }
+        if let Some(id) = held {
+            set_analog_pressed(self, id, false);
+            self.dispatch(id, KEY_UP, ev, sink, clock);
+        }
+        if let Some(id) = next {
+            set_analog_pressed(self, id, true);
+            self.dispatch(id, KEY_DOWN, ev, sink, clock);
+        }
+    }
+
+    /// Analog mode: the turned position goes to the virtual controller.
+    fn emit_pad_stick(&mut self, x: f32, y: f32, sink: &mut impl EventSink) {
+        let out = (pad_axis_value(x), pad_axis_value(y));
+        if out == self.pad_out {
+            return;
+        }
+        let (code_x, code_y) = if self.stick_mode == StickMode::AnalogRight {
+            (ABS_RX, ABS_RY)
+        } else {
+            (ABS_X, ABS_Y)
+        };
+        for (code, value, last) in [
+            (code_x, out.0, self.pad_out.0),
+            (code_y, out.1, self.pad_out.1),
+        ] {
+            if value != last {
+                sink.emit(Emitted {
+                    keyboard: false,
+                    ev_type: EV_ABS,
+                    code,
+                    value,
+                });
+            }
+        }
+        self.pad_out = out;
     }
 
     fn apply_analog_dir(
@@ -279,6 +430,23 @@ impl RemapEngine {
         match self.table.get(&key_id).cloned() {
             // The virtual devices have no axes and no gamepad buttons, so an
             // unbound stick, hat or gamepad button has nothing to pass on.
+            // In analog mode an unbound stick click is the virtual
+            // controller's stick button, so games get the whole stick.
+            None if key_id == KeyId::StickClick && self.stick_mode.is_analog() => {
+                let button = if self.stick_mode == StickMode::AnalogRight {
+                    BTN_THUMBR
+                } else {
+                    BTN_THUMBL
+                };
+                if value == KEY_DOWN || value == KEY_UP {
+                    sink.emit(Emitted {
+                        keyboard: false,
+                        ev_type: EV_KEY,
+                        code: button,
+                        value,
+                    });
+                }
+            }
             None if ev.ev_type == EV_ABS || key_id.is_stick() => {}
             None => {
                 sink.emit(Emitted {
@@ -509,6 +677,7 @@ mod tests {
             device_models: vec![DeviceModel::V2],
             bindings: BTreeMap::new(),
             model_bindings: BTreeMap::new(),
+            stick_mode: StickMode::default(),
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: 80,
@@ -726,6 +895,7 @@ mod tests {
             device_models: vec![model],
             bindings: BTreeMap::new(),
             model_bindings: BTreeMap::new(),
+            stick_mode: StickMode::default(),
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: 80,
@@ -942,6 +1112,7 @@ mod tests {
             device_models: vec![DeviceModel::V2],
             bindings: BTreeMap::new(),
             model_bindings: BTreeMap::new(),
+            stick_mode: StickMode::default(),
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: 80,
@@ -1144,6 +1315,172 @@ mod tests {
                 .map(crate::keymap::token_to_evdev)
                 .collect();
         assert_eq!(pressed, wasd, "the path pushes all four ways");
+    }
+
+    #[test]
+    fn v2_pro_stick_drives_the_same_keys_in_every_synapse_mode() {
+        let p: Profile =
+            serde_json::from_str(crate::pack::shipped_json("deadlock").unwrap()).unwrap();
+        let w = crate::keymap::token_to_evdev(KeyToken::W);
+        let d = crate::keymap::token_to_evdev(KeyToken::D);
+        let ctrl = crate::keymap::token_to_evdev(KeyToken::LeftCtrl);
+        // (x code, y code, full push value, click button)
+        let modes = [
+            (ABS_X, ABS_Y, 32767, crate::keymap::BTN_THUMBL),
+            (ABS_RX, ABS_RY, 32767, crate::keymap::BTN_THUMBR),
+            (ABS_HAT0X, ABS_HAT0Y, 1, crate::keymap::BTN_THUMBR),
+        ];
+        for (x, y, full, click) in modes {
+            let mut e = RemapEngine::new(DeviceModel::V2Pro);
+            e.apply_profile(&p);
+            let mut s = FakeSink(vec![]);
+            let mut c = FakeClock { t: 0 };
+            let codes = |s: &FakeSink| s.0.iter().map(|ev| (ev.code, ev.value)).collect::<Vec<_>>();
+            e.handle(v2_pro_event(3, y, -full), &mut s, &mut c);
+            e.handle(v2_pro_event(3, y, 0), &mut s, &mut c);
+            assert_eq!(codes(&s), vec![(w, 1), (w, 0)], "up, mode {x}");
+            s.0.clear();
+            e.handle(v2_pro_event(3, x, full), &mut s, &mut c);
+            e.handle(v2_pro_event(3, x, 0), &mut s, &mut c);
+            assert_eq!(codes(&s), vec![(d, 1), (d, 0)], "right, mode {x}");
+            s.0.clear();
+            e.handle(v2_pro_event(1, click, 1), &mut s, &mut c);
+            e.handle(v2_pro_event(1, click, 0), &mut s, &mut c);
+            assert_eq!(codes(&s), vec![(ctrl, 1), (ctrl, 0)], "click, mode {x}");
+        }
+    }
+
+    fn deadlock_on_v2_pro(mode: StickMode, rotation: i32) -> RemapEngine {
+        let mut p: Profile =
+            serde_json::from_str(crate::pack::shipped_json("deadlock").unwrap()).unwrap();
+        p.stick_mode = mode;
+        let mut e = RemapEngine::new(DeviceModel::V2Pro);
+        e.apply_profile(&p);
+        e.set_stick_rotation(rotation);
+        e
+    }
+
+    fn push(e: &mut RemapEngine, x: i32, y: i32, s: &mut FakeSink) {
+        let mut c = FakeClock { t: 0 };
+        e.handle(v2_pro_event(3, ABS_X, x), s, &mut c);
+        e.handle(v2_pro_event(3, ABS_Y, y), s, &mut c);
+    }
+
+    fn held_keys(s: &FakeSink) -> std::collections::BTreeSet<u16> {
+        let mut held = std::collections::BTreeSet::new();
+        for ev in s.0.iter().filter(|ev| ev.ev_type == EV_KEY) {
+            if ev.value == 1 {
+                held.insert(ev.code);
+            } else if ev.value == 0 {
+                held.remove(&ev.code);
+            }
+        }
+        held
+    }
+
+    #[test]
+    fn rotate_stick_turns_clockwise_and_stays_in_range() {
+        let close = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| {
+            (ax - bx).abs() < 1e-4 && (ay - by).abs() < 1e-4
+        };
+        // Up (y negative) turned 90 degrees clockwise is right.
+        assert!(close(rotate_stick(0.0, -1.0, 90), (1.0, 0.0)));
+        // Right turned -90 (counter-clockwise) is up.
+        assert!(close(rotate_stick(1.0, 0.0, -90), (0.0, -1.0)));
+        assert!(close(rotate_stick(0.3, 0.4, 0), (0.3, 0.4)));
+        assert!(close(rotate_stick(1.0, 0.0, 180), (-1.0, 0.0)));
+        let (x, y) = rotate_stick(1.0, 1.0, 45);
+        assert!(
+            x.abs() <= 1.0 && y.abs() <= 1.0,
+            "a turned corner is clamped"
+        );
+    }
+
+    #[test]
+    fn a_turned_stick_sends_the_keys_for_where_the_player_pushes() {
+        let w = crate::keymap::token_to_evdev(KeyToken::W);
+        // The player pushes forward but the stick reads right: -90 fixes it.
+        let mut e = deadlock_on_v2_pro(StickMode::Keys8, -90);
+        let mut s = FakeSink(vec![]);
+        push(&mut e, 32767, 0, &mut s);
+        assert_eq!(held_keys(&s), [w].into());
+        push(&mut e, 0, 0, &mut s);
+        assert!(held_keys(&s).is_empty());
+    }
+
+    #[test]
+    fn eight_way_holds_two_keys_on_a_diagonal_and_four_way_holds_one() {
+        let w = crate::keymap::token_to_evdev(KeyToken::W);
+        let d = crate::keymap::token_to_evdev(KeyToken::D);
+        let mut e = deadlock_on_v2_pro(StickMode::Keys8, 0);
+        let mut s = FakeSink(vec![]);
+        push(&mut e, 23000, -23000, &mut s);
+        assert_eq!(held_keys(&s), [w, d].into());
+
+        let mut e = deadlock_on_v2_pro(StickMode::Keys4, 0);
+        let mut s = FakeSink(vec![]);
+        // Mostly up, a little right: only W.
+        push(&mut e, 12000, -30000, &mut s);
+        assert_eq!(held_keys(&s), [w].into());
+        // Swing to an exact diagonal: W stays, no flicker to D.
+        push(&mut e, 23000, -23000, &mut s);
+        assert_eq!(held_keys(&s), [w].into());
+        // Clearly right now: W lets go, D presses.
+        push(&mut e, 32000, -5000, &mut s);
+        assert_eq!(held_keys(&s), [d].into());
+        let presses = s.0.iter().filter(|ev| ev.value == 1).count();
+        assert_eq!(presses, 2, "one press per direction, no flicker");
+        push(&mut e, 0, 0, &mut s);
+        assert!(held_keys(&s).is_empty());
+    }
+
+    #[test]
+    fn analog_mode_hands_the_turned_stick_to_the_virtual_controller() {
+        for (mode, code_x, code_y, button) in [
+            (StickMode::AnalogLeft, ABS_X, ABS_Y, BTN_THUMBL),
+            (StickMode::AnalogRight, ABS_RX, ABS_RY, BTN_THUMBR),
+        ] {
+            let mut e = deadlock_on_v2_pro(mode, -90);
+            assert!(e.binds_stick(), "analog mode takes the stick over");
+            let mut s = FakeSink(vec![]);
+            push(&mut e, 32767, 0, &mut s);
+            let axes: Vec<(u16, i32)> =
+                s.0.iter()
+                    .filter(|ev| ev.ev_type == EV_ABS)
+                    .map(|ev| (ev.code, ev.value))
+                    .collect();
+            // Read right, turned -90: straight up on the controller.
+            assert_eq!(axes.last(), Some(&(code_y, -32767)), "{mode:?}: {axes:?}");
+            assert!(!axes.iter().any(|(c, v)| *c == code_x && v.abs() > 1));
+            assert!(held_keys(&s).is_empty(), "no keys in analog mode");
+
+            // The click is the stick button, because Deadlock's click binding
+            // is replaced by an unbound one here.
+            let mut p: Profile =
+                serde_json::from_str(crate::pack::shipped_json("deadlock").unwrap()).unwrap();
+            p.stick_mode = mode;
+            p.model_bindings
+                .get_mut(&DeviceModel::V2Pro)
+                .unwrap()
+                .remove(&KeyId::StickClick);
+            e.apply_profile(&p);
+            let mut s = FakeSink(vec![]);
+            let mut c = FakeClock { t: 0 };
+            e.handle(
+                v2_pro_event(1, crate::keymap::BTN_THUMBL, 1),
+                &mut s,
+                &mut c,
+            );
+            e.handle(
+                v2_pro_event(1, crate::keymap::BTN_THUMBL, 0),
+                &mut s,
+                &mut c,
+            );
+            assert_eq!(
+                s.0.iter().map(|ev| (ev.code, ev.value)).collect::<Vec<_>>(),
+                vec![(button, 1), (button, 0)]
+            );
+        }
     }
 
     #[test]

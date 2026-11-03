@@ -16,3 +16,9 @@ pub const HOLD_REPEAT_RATE_DEFAULT_MS: u32 = 40;
 pub const IPC_MAX_MESSAGE_BYTES: u32 = 1_048_576;
 pub const ANALOG_PRESS_RATIO: f32 = 0.40;
 pub const ANALOG_RELEASE_RATIO: f32 = 0.30;
+/// In 4-way mode the held direction stays held until another one is pushed
+/// this much further than it, so a push near a diagonal does not flicker.
+pub const STICK_FOUR_WAY_SWITCH_RATIO: f32 = 1.2;
+/// Stick rotation is set in whole steps, from -180 to 180 degrees.
+pub const STICK_ROTATION_STEP_DEG: i32 = 15;
+pub const STICK_ROTATION_MAX_DEG: i32 = 180;

@@ -132,6 +132,13 @@ const SLUG_FIRST_SUFFIX: u32 = 2;
 /// Digits reserved for the collision suffix when trimming the base.
 const SLUG_MAX_SUFFIX_DIGITS: usize = 2;
 
+/// A stick rotation the app accepts: a whole number of steps, at most half
+/// a turn either way.
+pub fn valid_stick_rotation(degrees: i32) -> bool {
+    use crate::constants::{STICK_ROTATION_MAX_DEG, STICK_ROTATION_STEP_DEG};
+    degrees.abs() <= STICK_ROTATION_MAX_DEG && degrees % STICK_ROTATION_STEP_DEG == 0
+}
+
 fn valid_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     if bytes.is_empty() || bytes.len() > PROFILE_ID_MAX_LEN {
@@ -449,6 +456,29 @@ mod tests {
         p.model_bindings.clear();
         let json = serde_json::to_value(&p).unwrap();
         assert!(json.get("model_bindings").is_none(), "none, no field");
+    }
+
+    #[test]
+    fn stick_rotations_are_whole_steps_within_half_a_turn() {
+        for ok in [0, 15, -15, 90, -90, 180, -180] {
+            assert!(valid_stick_rotation(ok), "{ok}");
+        }
+        for bad in [1, 10, -7, 195, -195, 360] {
+            assert!(!valid_stick_rotation(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_stick_mode_round_trips_and_the_default_is_not_written() {
+        let mut p: Profile = serde_json::from_str(lol_json()).unwrap();
+        assert_eq!(p.stick_mode, crate::types::StickMode::Keys8);
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("stick_mode").is_none());
+        p.stick_mode = crate::types::StickMode::AnalogLeft;
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["stick_mode"], "analog_left");
+        let back: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(back.stick_mode, crate::types::StickMode::AnalogLeft);
     }
 
     #[test]

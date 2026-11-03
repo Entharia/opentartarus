@@ -7,7 +7,7 @@ use opentartarus_core::pack::SHIPPED_IDS;
 use opentartarus_core::paths::Paths;
 use opentartarus_core::record::RecordReason;
 use opentartarus_core::remap::{Clock, RawEvent, RemapEngine};
-use opentartarus_core::store::read_active_id;
+use opentartarus_core::store::{read_active_id, read_stick_rotation};
 use opentartarus_core::types::{DeviceModel, MouseButton, ScrollDir};
 use opentartarus_daemon::device::{
     busy_decision, classify_device_io, detect_status, device_ui_state, enumerate_tartarus,
@@ -156,7 +156,9 @@ async fn run() -> Result<(), ErrorCode> {
         evdev_ok,
         uinput_ok,
         grab_conflict,
+        stick_rotation_deg: read_stick_rotation(&paths),
     };
+    state.engine.set_stick_rotation(state.stick_rotation_deg);
 
     if let Ok(Some(id)) = read_active_id(&paths) {
         if SHIPPED_IDS.contains(&id.as_str()) {
@@ -670,6 +672,8 @@ fn on_device_appeared(
     st.evdev_ok = evdev_ok;
     st.grab_conflict = None;
     st.engine = RemapEngine::new(detected.model);
+    let rotation = st.stick_rotation_deg;
+    st.engine.set_stick_rotation(rotation);
     update_lighting_usb(&mut st.lighting, Some((detected.vid, detected.pid)));
     st.openrazer_available = st.lighting.available();
     let active = st.active_id.clone();

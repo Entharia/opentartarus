@@ -64,6 +64,10 @@ pub enum Method {
     DeleteProfile,
     ShowWindow,
     QuitDaemon,
+    /// Sets what the thumbstick does with one profile.
+    SetStickMode,
+    /// Sets how far the thumbstick's directions are turned, for every profile.
+    SetStickRotation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
