@@ -154,31 +154,26 @@ pub(crate) fn lighting_ids_match(
     }
 }
 
+/// OpenRazer's `getVidPid` returns `[vid, pid]` as an array of int32.
 fn dbus_vid_pid(conn: &zbus::blocking::Connection, path: &str) -> Option<(u16, u16)> {
-    let vid = dbus_id_method(conn, path, "getVid")?;
-    let pid = dbus_id_method(conn, path, "getPid")?;
-    Some((vid, pid))
-}
-
-fn dbus_id_method(conn: &zbus::blocking::Connection, path: &str, method: &str) -> Option<u16> {
     let reply = conn
         .call_method(
             Some(OPENRAZER_BUS_NAME),
             path,
             Some(MISC_INTERFACE),
-            method,
+            "getVidPid",
             &(),
         )
         .ok()?;
-    if let Ok(raw) = reply.body().deserialize::<String>() {
-        return parse_usb_id(&raw);
-    }
-    reply.body().deserialize::<u16>().ok()
+    let ids: Vec<i32> = reply.body().deserialize().ok()?;
+    vid_pid_from_ids(&ids)
 }
 
-fn parse_usb_id(raw: &str) -> Option<u16> {
-    let trimmed = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-    u16::from_str_radix(trimmed, 16).ok()
+pub(crate) fn vid_pid_from_ids(ids: &[i32]) -> Option<(u16, u16)> {
+    match ids {
+        [vid, pid] => Some((u16::try_from(*vid).ok()?, u16::try_from(*pid).ok()?)),
+        _ => None,
+    }
 }
 
 fn apply_dbus_device(
@@ -195,7 +190,8 @@ fn apply_dbus_device(
             dbus_chroma(conn, path, "setStatic", &(rgb[0], rgb[1], rgb[2]))?;
         }
         LightingEffect::Wave => {
-            dbus_chroma(conn, path, "setWave", &(wave_sysfs_value(),))?;
+            // OpenRazer declares `setWave` with an int32 direction.
+            dbus_chroma(conn, path, "setWave", &(i32::from(wave_sysfs_value()),))?;
         }
         LightingEffect::Spectrum => {
             dbus_chroma(conn, path, "setSpectrum", &())?;
@@ -351,6 +347,15 @@ mod tests {
         ));
         assert_eq!(OPENRAZER_BUS_NAME, "org.razer");
         assert!(!should_request_openrazer_bus_name());
+    }
+
+    #[test]
+    fn get_vid_pid_reply_is_read_as_a_pair() {
+        assert_eq!(vid_pid_from_ids(&[0x1532, 0x02eb]), Some((0x1532, 0x02eb)));
+        assert_eq!(vid_pid_from_ids(&[0x1532]), None);
+        assert_eq!(vid_pid_from_ids(&[0x1532, 0x02eb, 1]), None);
+        assert_eq!(vid_pid_from_ids(&[-1, 0x02eb]), None);
+        assert_eq!(vid_pid_from_ids(&[0x1532, 0x1_0000]), None);
     }
 
     #[test]
