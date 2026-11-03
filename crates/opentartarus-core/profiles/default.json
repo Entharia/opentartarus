@@ -2,7 +2,7 @@
   "id": "default",
   "name": "Default",
   "game": "default",
-  "device_models": ["v2", "pro"],
+  "device_models": ["v2", "pro", "v2pro"],
   "bindings": {
     "kp01": { "type": "key", "key": "1", "modifiers": [] },
     "kp02": { "type": "key", "key": "2", "modifiers": [] },
@@ -28,6 +28,41 @@
     "thumb_w": { "type": "key", "key": "left", "modifiers": [] },
     "thumb_s": { "type": "key", "key": "down", "modifiers": [] },
     "thumb_e": { "type": "key", "key": "right", "modifiers": [] }
+  },
+  "model_bindings": {
+    "v2pro": {
+      "kp21": { "type": "key", "key": "grave", "modifiers": [] },
+      "kp01": { "type": "key", "key": "1", "modifiers": [] },
+      "kp02": { "type": "key", "key": "2", "modifiers": [] },
+      "kp03": { "type": "key", "key": "3", "modifiers": [] },
+      "kp04": { "type": "key", "key": "4", "modifiers": [] },
+      "kp05": { "type": "key", "key": "5", "modifiers": [] },
+      "kp06": { "type": "key", "key": "tab", "modifiers": [] },
+      "kp07": { "type": "key", "key": "q", "modifiers": [] },
+      "kp08": { "type": "key", "key": "w", "modifiers": [] },
+      "kp09": { "type": "key", "key": "e", "modifiers": [] },
+      "kp10": { "type": "key", "key": "r", "modifiers": [] },
+      "kp22": { "type": "key", "key": "t", "modifiers": [] },
+      "kp11": { "type": "key", "key": "capslock", "modifiers": [] },
+      "kp12": { "type": "key", "key": "a", "modifiers": [] },
+      "kp13": { "type": "key", "key": "s", "modifiers": [] },
+      "kp14": { "type": "key", "key": "d", "modifiers": [] },
+      "kp15": { "type": "key", "key": "f", "modifiers": [] },
+      "kp23": { "type": "key", "key": "g", "modifiers": [] },
+      "kp16": { "type": "key", "key": "leftshift", "modifiers": [] },
+      "kp17": { "type": "key", "key": "z", "modifiers": [] },
+      "kp18": { "type": "key", "key": "x", "modifiers": [] },
+      "kp19": { "type": "key", "key": "c", "modifiers": [] },
+      "kp24": { "type": "key", "key": "v", "modifiers": [] },
+      "kp25": { "type": "key", "key": "leftctrl", "modifiers": [] },
+      "kp26": { "type": "key", "key": "b", "modifiers": [] },
+      "kp27": { "type": "key", "key": "i", "modifiers": [] },
+      "kp20": { "type": "key", "key": "space", "modifiers": [] },
+      "analog_up": { "type": "key", "key": "up", "modifiers": [] },
+      "analog_left": { "type": "key", "key": "left", "modifiers": [] },
+      "analog_down": { "type": "key", "key": "down", "modifiers": [] },
+      "analog_right": { "type": "key", "key": "right", "modifiers": [] }
+    }
   },
   "lighting": {"effect": "none", "brightness": 80}
 }

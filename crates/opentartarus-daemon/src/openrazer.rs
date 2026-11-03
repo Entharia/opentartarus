@@ -1,9 +1,10 @@
-use opentartarus_core::constants::{USB_PID_TARTARUS_PRO, USB_PID_TARTARUS_V2, USB_VID_RAZER};
+use opentartarus_core::constants::USB_VID_RAZER;
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::lighting::{
     brightness_to_razer, openrazer_lighting_ready, should_request_openrazer_bus_name,
     wave_sysfs_value, LightingClient,
 };
+use opentartarus_core::types::DeviceModel;
 use opentartarus_core::types::{Lighting, LightingEffect};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -309,10 +310,9 @@ pub(crate) fn sysfs_entry_matches(name: &str, vid: Option<u16>, pid: Option<u16>
         (Some(vid), Some(pid)) => {
             opentartarus_core::remap::allow_grab(vid, pid) && sysfs_name_matches(name, vid, pid)
         }
-        _ => {
-            sysfs_name_matches(name, USB_VID_RAZER, USB_PID_TARTARUS_V2)
-                || sysfs_name_matches(name, USB_VID_RAZER, USB_PID_TARTARUS_PRO)
-        }
+        _ => DeviceModel::ALL
+            .iter()
+            .any(|model| sysfs_name_matches(name, USB_VID_RAZER, model.usb_pid())),
     }
 }
 
@@ -325,6 +325,7 @@ pub fn sysfs_name_matches(name: &str, vid: u16, pid: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentartarus_core::constants::{USB_PID_TARTARUS_PRO, USB_PID_TARTARUS_V2};
 
     #[test]
     fn sysfs_name_matches_tartarus_ids() {

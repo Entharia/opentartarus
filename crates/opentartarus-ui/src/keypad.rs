@@ -3,7 +3,7 @@ use crate::theme::{self, with_opacity};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Program, Stroke, Text};
 use iced::{alignment, Point, Rectangle, Renderer, Size, Theme};
-use opentartarus_core::labels::bind_label;
+use opentartarus_core::labels::{bind_label, v2_pro_key_number, V2_PRO_ROWS};
 use opentartarus_core::types::{Action, DeviceModel, KeyId};
 use std::collections::BTreeMap;
 
@@ -39,12 +39,17 @@ fn face_glyph(id: KeyId) -> Option<&'static str> {
         KeyId::ThumbSe => Some("\u{2198}"),
         KeyId::ThumbSw => Some("\u{2199}"),
         KeyId::ThumbNw => Some("\u{2196}"),
+        KeyId::StickClick => Some(theme::STICK_CLICK_GLYPH),
         _ => None,
     }
 }
 
-/// The two-digit number printed on the physical key, for `kp01`-`kp20` only.
-fn key_number(id: KeyId) -> Option<String> {
+/// The two-digit number printed on the physical key: `kp01`-`kp20` on the
+/// V2 and Pro, and the 27 face keys counted along the rows on the V2 Pro.
+fn key_number(id: KeyId, model: Option<DeviceModel>) -> Option<String> {
+    if model == Some(DeviceModel::V2Pro) {
+        return v2_pro_key_number(id).map(|number| format!("{number:02}"));
+    }
     GRID_ROW_KEYS
         .iter()
         .position(|candidate| *candidate == id)
@@ -52,7 +57,14 @@ fn key_number(id: KeyId) -> Option<String> {
         .or_else(|| (id == KeyId::Kp20).then(|| String::from("20")))
 }
 
-fn corner_for(id: KeyId) -> f32 {
+fn corner_for(id: KeyId, model: Option<DeviceModel>) -> f32 {
+    if model == Some(DeviceModel::V2Pro) {
+        return if id.is_stick() {
+            CORNER_DPAD
+        } else {
+            CORNER_KEY
+        };
+    }
     if id == KeyId::Kp20 {
         CORNER_THUMB
     } else if GRID_ROW_KEYS.contains(&id) {
@@ -96,7 +108,7 @@ impl Program<Message> for Keypad {
         let accent_soft = with_opacity(theme::COLOR_ACCENT_SOFT, opacity);
 
         // The empty middle of the thumb pad, drawn first so keys sit above it.
-        if !matches!(self.model, Some(DeviceModel::Pro)) {
+        if !matches!(self.model, Some(DeviceModel::Pro | DeviceModel::V2Pro)) {
             let centre = thumb_pad_center_rect(bounds.size());
             frame.fill_text(Text {
                 content: String::from(theme::THUMB_CENTER_LABEL),
@@ -114,7 +126,7 @@ impl Program<Message> for Keypad {
             let path = Path::rounded_rectangle(
                 rect.position(),
                 rect.size(),
-                iced::border::Radius::from(corner_for(id)),
+                iced::border::Radius::from(corner_for(id, self.model)),
             );
             let fill = if self.hovered == Some(id) {
                 hover_fill
@@ -130,7 +142,7 @@ impl Program<Message> for Keypad {
             let bevel = Path::rounded_rectangle(
                 Point::new(rect.x, rect.y + theme::CAP_SHADOW_DROP),
                 rect.size(),
-                iced::border::Radius::from(corner_for(id)),
+                iced::border::Radius::from(corner_for(id, self.model)),
             );
             frame.fill(&bevel, bevel_color);
             frame.fill(&path, fill);
@@ -156,7 +168,7 @@ impl Program<Message> for Keypad {
                         .with_width(theme::BORDER_SELECTED),
                 );
             }
-            if let Some(number) = key_number(id) {
+            if let Some(number) = key_number(id, self.model) {
                 frame.fill_text(Text {
                     content: number,
                     position: Point::new(rect.x + NUMBER_INSET, rect.y + NUMBER_INSET),
@@ -338,17 +350,91 @@ const ANALOG_PAD_CELLS: [(KeyId, usize, usize); 4] = [
 const DRAW_OVERHANG: f32 = SELECTED_GLOW_WIDTH / HALF + theme::CAP_SHADOW_DROP;
 
 fn fit(size: Size) -> (f32, f32, f32) {
+    fit_natural(size, NATURAL_WIDTH, NATURAL_HEIGHT)
+}
+
+fn fit_natural(size: Size, natural_width: f32, natural_height: f32) -> (f32, f32, f32) {
     let usable_width = (size.width - DRAW_OVERHANG * HALF).max(0.0);
     let usable_height = (size.height - DRAW_OVERHANG * HALF).max(0.0);
-    let scale = (usable_width / NATURAL_WIDTH)
-        .min(usable_height / NATURAL_HEIGHT)
+    let scale = (usable_width / natural_width)
+        .min(usable_height / natural_height)
         .min(MAX_SCALE);
-    let offset_x = DRAW_OVERHANG + (usable_width - NATURAL_WIDTH * scale) / HALF;
-    let offset_y = DRAW_OVERHANG + (usable_height - NATURAL_HEIGHT * scale) / HALF;
+    let offset_x = DRAW_OVERHANG + (usable_width - natural_width * scale) / HALF;
+    let offset_y = DRAW_OVERHANG + (usable_height - natural_height * scale) / HALF;
     (scale, offset_x, offset_y)
 }
 
+/// The V2 Pro: five rows of 6, 6, 6, 5 and 4 keys, and under them the
+/// thumbstick as a 3x3 grid with its four directions on the edges and its
+/// click in the middle. It has no wheel column.
+/// Widest row in key units: a double key plus five singles, or two doubles
+/// plus three singles.
+const V2_PRO_WIDEST_ROW: f32 = 7.0;
+const V2_PRO_ROW_COUNT: f32 = 5.0;
+/// A double key spans two key widths and the gap between them, so it lines up
+/// with the singles in the rows around it.
+const V2_PRO_DOUBLE_WIDTH: f32 = KEY_WIDTH * 2.0 + KEY_GAP;
+const V2_PRO_GRID_WIDTH: f32 = KEY_WIDTH * V2_PRO_WIDEST_ROW + KEY_GAP * (V2_PRO_WIDEST_ROW - 1.0);
+const V2_PRO_GRID_HEIGHT: f32 = KEY_HEIGHT * V2_PRO_ROW_COUNT + KEY_GAP * (V2_PRO_ROW_COUNT - 1.0);
+const V2_PRO_NATURAL_WIDTH: f32 = V2_PRO_GRID_WIDTH;
+const V2_PRO_NATURAL_HEIGHT: f32 = V2_PRO_GRID_HEIGHT + SECTION_GAP + DPAD_HEIGHT;
+const V2_PRO_STICK_CELLS: [(KeyId, usize, usize); 5] = [
+    (KeyId::AnalogUp, 1, 0),
+    (KeyId::AnalogLeft, 0, 1),
+    (KeyId::StickClick, 1, 1),
+    (KeyId::AnalogRight, 2, 1),
+    (KeyId::AnalogDown, 1, 2),
+];
+
+/// The first key of every row is double width, and so is the last key of
+/// rows 4 and 5 (keys 23 and 27). The rest are single.
+fn v2_pro_key_width(row: usize, slot: usize, length: usize) -> f32 {
+    let last = slot + 1 == length;
+    if slot == 0 || (row >= 3 && last) {
+        V2_PRO_DOUBLE_WIDTH
+    } else {
+        KEY_WIDTH
+    }
+}
+
+fn v2_pro_rects(size: Size) -> Vec<(KeyId, Rectangle)> {
+    let (scale, offset_x, offset_y) =
+        fit_natural(size, V2_PRO_NATURAL_WIDTH, V2_PRO_NATURAL_HEIGHT);
+    let place = |x: f32, y: f32, w: f32, h: f32| {
+        Rectangle::new(
+            Point::new(offset_x + x * scale, offset_y + y * scale),
+            Size::new(w * scale, h * scale),
+        )
+    };
+    let mut out = Vec::new();
+    let mut y = 0.0f32;
+    for (row, keys) in V2_PRO_ROWS.iter().enumerate() {
+        let widths: Vec<f32> = (0..keys.len())
+            .map(|slot| v2_pro_key_width(row, slot, keys.len()))
+            .collect();
+        // Rows start flush left, as on the pad: the short bottom row lines
+        // up with the keys above it instead of sitting centred.
+        let mut x = 0.0f32;
+        for (id, width) in keys.iter().zip(widths) {
+            out.push((*id, place(x, y, width, KEY_HEIGHT)));
+            x += width + KEY_GAP;
+        }
+        y += KEY_HEIGHT + KEY_GAP;
+    }
+    let stick_top = V2_PRO_GRID_HEIGHT + SECTION_GAP;
+    let stick_left = (V2_PRO_NATURAL_WIDTH - DPAD_WIDTH) / HALF;
+    for (id, column, row) in V2_PRO_STICK_CELLS {
+        let cell_x = stick_left + column as f32 * (DPAD_CELL_WIDTH + DPAD_GAP);
+        let cell_y = stick_top + row as f32 * (DPAD_CELL_HEIGHT + DPAD_GAP);
+        out.push((id, place(cell_x, cell_y, DPAD_CELL_WIDTH, DPAD_CELL_HEIGHT)));
+    }
+    out
+}
+
 fn key_rects(size: Size, model: Option<DeviceModel>) -> Vec<(KeyId, Rectangle)> {
+    if model == Some(DeviceModel::V2Pro) {
+        return v2_pro_rects(size);
+    }
     let (scale, offset_x, offset_y) = fit(size);
     let place = |x: f32, y: f32, w: f32, h: f32| {
         Rectangle::new(
@@ -509,6 +595,98 @@ mod tests {
                 | KeyId::ThumbW
                 | KeyId::ThumbNw
         )));
+    }
+
+    #[test]
+    fn v2_pro_draws_27_keys_and_the_stick_without_a_wheel() {
+        let got = ids(BIG, Some(DeviceModel::V2Pro));
+        assert_eq!(got.len(), 32, "27 face keys + 4 stick directions + click");
+        let mut sorted = got.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), got.len(), "no key may appear twice");
+        for id in KeyId::ALL {
+            assert_eq!(
+                got.contains(&id),
+                DeviceModel::V2Pro.has_key(id),
+                "drawn keys and has_key disagree on {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_pro_rows_stack_and_nothing_overlaps_or_clips() {
+        let model = Some(DeviceModel::V2Pro);
+        for size in [BIG, TIGHT, Size::new(550.0, 550.0)] {
+            let rects = key_rects(size, model);
+            for (i, (a_id, a)) in rects.iter().enumerate() {
+                for (b_id, b) in rects.iter().skip(i + 1) {
+                    let apart = a.x + a.width <= b.x + f32::EPSILON
+                        || b.x + b.width <= a.x + f32::EPSILON
+                        || a.y + a.height <= b.y + f32::EPSILON
+                        || b.y + b.height <= a.y + f32::EPSILON;
+                    assert!(apart, "{a_id:?} overlaps {b_id:?} at {size:?}");
+                }
+                let centre = Point::new(a.center_x(), a.center_y());
+                assert_eq!(hit_test(centre, size, model), Some(*a_id));
+                assert!(a.x >= 0.0 && a.y >= 0.0, "{a_id:?} left the bounds");
+                assert!(
+                    a.x + a.width <= size.width + 1.0 && a.y + a.height <= size.height + 1.0,
+                    "{a_id:?} overflows at {size:?}"
+                );
+            }
+            let y_of = |id: KeyId| rects.iter().find(|(k, _)| *k == id).unwrap().1.y;
+            for pair in V2_PRO_ROWS.windows(2) {
+                assert!(y_of(pair[0][0]) < y_of(pair[1][0]));
+            }
+            let lowest_key = rects
+                .iter()
+                .filter(|(id, _)| !id.is_stick())
+                .map(|(_, r)| r.y + r.height)
+                .fold(f32::MIN, f32::max);
+            assert!(
+                y_of(KeyId::AnalogUp) >= lowest_key,
+                "stick sits below the keys"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_pro_double_keys_are_the_row_starts_and_keys_23_and_27() {
+        let rects = key_rects(BIG, Some(DeviceModel::V2Pro));
+        let rect_of = |id: KeyId| rects.iter().find(|(k, _)| *k == id).unwrap().1;
+        let single = rect_of(KeyId::Kp02).width;
+        let double_ids: Vec<KeyId> = V2_PRO_ROWS
+            .iter()
+            .map(|row| row[0])
+            .chain([KeyId::Kp24, KeyId::Kp20])
+            .collect();
+        for (id, rect) in &rects {
+            if id.is_stick() {
+                continue;
+            }
+            let ratio = rect.width / single;
+            if double_ids.contains(id) {
+                assert!(ratio > 2.0 && ratio < 2.3, "{id:?} must be double: {ratio}");
+            } else {
+                assert!((ratio - 1.0).abs() < 0.01, "{id:?} must be single: {ratio}");
+            }
+        }
+        // The double keys line up with the singles: row 2's third key starts
+        // where row 1's third key does.
+        assert!((rect_of(KeyId::Kp01).x - rect_of(KeyId::Kp07).x).abs() < 0.5);
+        // The short bottom row starts flush left, like the rows above it.
+        assert!((rect_of(KeyId::Kp25).x - rect_of(KeyId::Kp16).x).abs() < 0.5);
+        assert!((rect_of(KeyId::Kp26).x - rect_of(KeyId::Kp17).x).abs() < 0.5);
+    }
+
+    #[test]
+    fn v2_pro_numbers_follow_its_rows() {
+        let model = Some(DeviceModel::V2Pro);
+        assert_eq!(key_number(KeyId::Kp21, model).as_deref(), Some("01"));
+        assert_eq!(key_number(KeyId::Kp20, model).as_deref(), Some("27"));
+        assert_eq!(key_number(KeyId::AnalogUp, model), None);
+        assert_eq!(key_number(KeyId::Kp21, Some(DeviceModel::V2)), None);
     }
 
     #[test]

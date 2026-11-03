@@ -1,7 +1,4 @@
-use opentartarus_core::constants::{
-    RECORD_TIMEOUT_MAX_MS, RECORD_TIMEOUT_MS, USB_PID_TARTARUS_PRO, USB_PID_TARTARUS_V2,
-    USB_VID_RAZER,
-};
+use opentartarus_core::constants::{RECORD_TIMEOUT_MAX_MS, RECORD_TIMEOUT_MS, USB_VID_RAZER};
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::Method;
 use opentartarus_core::labels::profile_row_order;
@@ -74,13 +71,9 @@ fn get_status<L: LightingClient>(state: &DaemonState<L>) -> Value {
             None => Value::Null,
         };
         let (vid, pid) = match state.model {
-            Some(DeviceModel::V2) => (
+            Some(model) => (
                 json!(usb_id_hex(USB_VID_RAZER)),
-                json!(usb_id_hex(USB_PID_TARTARUS_V2)),
-            ),
-            Some(DeviceModel::Pro) => (
-                json!(usb_id_hex(USB_VID_RAZER)),
-                json!(usb_id_hex(USB_PID_TARTARUS_PRO)),
+                json!(usb_id_hex(model.usb_pid())),
             ),
             None => (Value::Null, Value::Null),
         };
@@ -276,7 +269,7 @@ fn set_binding<L: LightingClient>(
         serde_json::from_value(params.get("action").cloned().unwrap_or(Value::Null))
             .map_err(|_| ErrorCode::InvalidProfile)?;
     let mut profile = load_user_copy(state, &profile_id)?;
-    profile.bindings.insert(key_id, action);
+    profile.layout_mut(state.model).insert(key_id, action);
     persist_profile(state, &mut profile, false)?;
     Ok(json!({ "id": profile_id }))
 }
@@ -288,7 +281,7 @@ fn clear_binding<L: LightingClient>(
     let profile_id = require_string(params, "profile_id")?;
     let key_id = param_key_id(params)?;
     let mut profile = load_user_copy(state, &profile_id)?;
-    profile.bindings.remove(&key_id);
+    profile.layout_mut(state.model).remove(&key_id);
     persist_profile(state, &mut profile, false)?;
     Ok(json!({ "id": profile_id }))
 }
@@ -349,7 +342,9 @@ fn submit_record<L: LightingClient>(
     match outcome {
         RecordOutcome::Recorded { key_id, action } => {
             let mut profile = load_user_copy(state, &profile_id)?;
-            profile.bindings.insert(key_id, action.clone());
+            profile
+                .layout_mut(state.model)
+                .insert(key_id, action.clone());
             persist_profile(state, &mut profile, false)?;
             Ok(json!({
                 "key_id": key_id,
@@ -721,6 +716,67 @@ mod tests {
                 modifiers: vec![]
             }),
             "the edit lands on the custom copy"
+        );
+    }
+
+    #[test]
+    fn an_edit_on_the_v2_pro_changes_its_own_layout_and_leaves_the_shared_one() {
+        let mut st = state();
+        st.model = Some(DeviceModel::V2Pro);
+        handle_request(&mut st, Method::ApplyProfile, json!({"id": "deadlock"}), 0).unwrap();
+        let bind = |st: &mut DaemonState<_>, key_id: &str, key: &str| {
+            handle_request(
+                st,
+                Method::SetBinding,
+                json!({
+                    "profile_id": "deadlock",
+                    "key_id": key_id,
+                    "action": { "type": "key", "key": key, "modifiers": [] }
+                }),
+                1,
+            )
+            .unwrap();
+        };
+        bind(&mut st, "kp12", "h");
+        let shipped = shipped_profile("deadlock").unwrap();
+        let mine = read_user_profile(&st.paths, "deadlock").unwrap();
+        let h = Action::Key {
+            key: KeyToken::H,
+            modifiers: vec![],
+        };
+        assert_eq!(
+            mine.model_bindings[&DeviceModel::V2Pro].get(&KeyId::Kp12),
+            Some(&h)
+        );
+        assert_eq!(
+            mine.bindings, shipped.bindings,
+            "the V2 layout is untouched"
+        );
+
+        handle_request(
+            &mut st,
+            Method::ClearBinding,
+            json!({"profile_id": "deadlock", "key_id": "stick_click"}),
+            2,
+        )
+        .unwrap();
+        let mine = read_user_profile(&st.paths, "deadlock").unwrap();
+        assert!(!mine.model_bindings[&DeviceModel::V2Pro].contains_key(&KeyId::StickClick));
+
+        // On a V2 the same edit goes to the shared layout.
+        st.model = Some(DeviceModel::V2);
+        bind(&mut st, "kp12", "j");
+        let mine = read_user_profile(&st.paths, "deadlock").unwrap();
+        assert_eq!(
+            mine.bindings.get(&KeyId::Kp12),
+            Some(&Action::Key {
+                key: KeyToken::J,
+                modifiers: vec![]
+            })
+        );
+        assert_eq!(
+            mine.model_bindings[&DeviceModel::V2Pro].get(&KeyId::Kp12),
+            Some(&h)
         );
     }
 

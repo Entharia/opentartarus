@@ -726,6 +726,7 @@ impl App {
         match self.model {
             Some(DeviceModel::V2) => theme::DEVICE_CONNECTED_V2,
             Some(DeviceModel::Pro) => theme::DEVICE_CONNECTED_PRO,
+            Some(DeviceModel::V2Pro) => theme::DEVICE_CONNECTED_V2_PRO,
             None => theme::DEVICE_NOT_CONNECTED,
         }
     }
@@ -1010,9 +1011,18 @@ impl App {
         if self.device_present {
             self.ever_present = true;
         }
-        self.model = device
+        let model = device
             .get("model")
             .and_then(|v| serde_json::from_value::<DeviceModel>(v.clone()).ok());
+        let changed = model != self.model;
+        self.model = model;
+        // A profile can carry its own layout for one model, so the keys to
+        // show change with the pad.
+        if changed {
+            if let Some(id) = self.active_profile_id.clone() {
+                self.load_profile(&id);
+            }
+        }
     }
 
     fn apply_profiles(&mut self, result: &Value) {
@@ -1051,7 +1061,7 @@ impl App {
 
     fn load_profile(&mut self, id: &str) {
         if let Some(profile) = read_profile(id) {
-            self.bindings = profile.bindings;
+            self.bindings = profile.layout(self.model).clone();
             self.lighting = profile.lighting;
             self.setup_note = profile.setup_note;
         }
@@ -1564,6 +1574,8 @@ mod tests {
         assert_eq!(app.device_pill_text(), theme::DEVICE_CONNECTED_V2);
         app.model = Some(DeviceModel::Pro);
         assert_eq!(app.device_pill_text(), theme::DEVICE_CONNECTED_PRO);
+        app.model = Some(DeviceModel::V2Pro);
+        assert_eq!(app.device_pill_text(), theme::DEVICE_CONNECTED_V2_PRO);
         app.device_present = false;
         assert_eq!(app.device_pill_text(), theme::DEVICE_NOT_CONNECTED);
         app.device_present = true;

@@ -2,7 +2,7 @@
   "id": "dota-2",
   "name": "Dota 2",
   "game": "dota-2",
-  "device_models": ["v2", "pro"],
+  "device_models": ["v2", "pro", "v2pro"],
   "bindings": {
     "kp01": { "type": "key", "key": "q", "modifiers": [] },
     "kp02": { "type": "key", "key": "w", "modifiers": [] },
@@ -24,6 +24,34 @@
     "kp18": { "type": "key", "key": "f3", "modifiers": [] },
     "kp19": { "type": "key", "key": "tab", "modifiers": [] },
     "kp20": { "type": "key", "key": "f1", "modifiers": [] }
+  },
+  "model_bindings": {
+    "v2pro": {
+      "kp21": { "type": "key", "key": "f4", "modifiers": [] },
+      "kp06": { "type": "key", "key": "z", "modifiers": [] },
+      "kp07": { "type": "key", "key": "x", "modifiers": [] },
+      "kp08": { "type": "key", "key": "c", "modifiers": [] },
+      "kp09": { "type": "key", "key": "v", "modifiers": [] },
+      "kp10": { "type": "key", "key": "f", "modifiers": [] },
+      "kp11": { "type": "key", "key": "q", "modifiers": [] },
+      "kp12": { "type": "key", "key": "w", "modifiers": [] },
+      "kp13": { "type": "key", "key": "e", "modifiers": [] },
+      "kp14": { "type": "key", "key": "r", "modifiers": [] },
+      "kp15": { "type": "key", "key": "d", "modifiers": [] },
+      "kp16": { "type": "key", "key": "a", "modifiers": [] },
+      "kp17": { "type": "key", "key": "s", "modifiers": [] },
+      "kp18": { "type": "key", "key": "b", "modifiers": [] },
+      "kp19": { "type": "key", "key": "n", "modifiers": [] },
+      "kp24": { "type": "key", "key": "tab", "modifiers": [] },
+      "kp25": { "type": "key", "key": "grave", "modifiers": [] },
+      "kp26": { "type": "key", "key": "f2", "modifiers": [] },
+      "kp27": { "type": "key", "key": "f3", "modifiers": [] },
+      "kp20": { "type": "key", "key": "f1", "modifiers": [] },
+      "analog_up": { "type": "key", "key": "up", "modifiers": [] },
+      "analog_left": { "type": "key", "key": "left", "modifiers": [] },
+      "analog_down": { "type": "key", "key": "down", "modifiers": [] },
+      "analog_right": { "type": "key", "key": "right", "modifiers": [] }
+    }
   },
   "lighting": {"effect": "static", "brightness": 80, "color": [200, 40, 40]}
 }

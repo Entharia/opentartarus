@@ -1,11 +1,46 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DeviceModel {
     V2,
     Pro,
+    /// The Tartarus V2 Pro (`1532:02eb`): 27 keys in rows of 6, 6, 6, 5 and 4,
+    /// a gamepad-style thumbstick with a click, and no scroll wheel.
+    #[serde(rename = "v2pro")]
+    V2Pro,
+}
+
+impl DeviceModel {
+    pub const ALL: [DeviceModel; 3] = [DeviceModel::V2, DeviceModel::Pro, DeviceModel::V2Pro];
+
+    pub fn usb_pid(self) -> u16 {
+        match self {
+            Self::V2 => crate::constants::USB_PID_TARTARUS_V2,
+            Self::Pro => crate::constants::USB_PID_TARTARUS_PRO,
+            Self::V2Pro => crate::constants::USB_PID_TARTARUS_V2_PRO,
+        }
+    }
+
+    pub fn from_usb_pid(pid: u16) -> Option<Self> {
+        Self::ALL.into_iter().find(|model| model.usb_pid() == pid)
+    }
+
+    /// Whether this model physically has `key`.
+    pub fn has_key(self, key: KeyId) -> bool {
+        match self {
+            Self::V2 => !key.is_analog() && !key.is_v2_pro_only(),
+            Self::Pro => !key.is_thumb() && !key.is_v2_pro_only(),
+            Self::V2Pro => {
+                !key.is_thumb()
+                    && !matches!(
+                        key,
+                        KeyId::WheelUp | KeyId::WheelDown | KeyId::WheelClick | KeyId::Mode
+                    )
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -50,6 +85,20 @@ pub enum KeyId {
     Kp19,
     #[serde(rename = "kp20")]
     Kp20,
+    #[serde(rename = "kp21")]
+    Kp21,
+    #[serde(rename = "kp22")]
+    Kp22,
+    #[serde(rename = "kp23")]
+    Kp23,
+    #[serde(rename = "kp24")]
+    Kp24,
+    #[serde(rename = "kp25")]
+    Kp25,
+    #[serde(rename = "kp26")]
+    Kp26,
+    #[serde(rename = "kp27")]
+    Kp27,
     #[serde(rename = "wheel_up")]
     WheelUp,
     #[serde(rename = "wheel_down")]
@@ -82,13 +131,16 @@ pub enum KeyId {
     AnalogLeft,
     #[serde(rename = "analog_right")]
     AnalogRight,
+    #[serde(rename = "stick_click")]
+    StickClick,
 }
 
 impl KeyId {
     /// Every physical key, in declaration order.
-    /// 20 grid keys + 3 wheel + mode + 8 thumb directions + 4 analog = 36.
+    /// 20 grid keys + 3 wheel + mode + 8 thumb directions + 4 analog = 36,
+    /// plus the V2 Pro's 7 extra keys and stick click = 44.
     /// Used by exhaustive tests and by the keypad widget's geometry check.
-    pub const ALL: [KeyId; 36] = [
+    pub const ALL: [KeyId; 44] = [
         KeyId::Kp01,
         KeyId::Kp02,
         KeyId::Kp03,
@@ -125,7 +177,35 @@ impl KeyId {
         KeyId::AnalogDown,
         KeyId::AnalogLeft,
         KeyId::AnalogRight,
+        KeyId::Kp21,
+        KeyId::Kp22,
+        KeyId::Kp23,
+        KeyId::Kp24,
+        KeyId::Kp25,
+        KeyId::Kp26,
+        KeyId::Kp27,
+        KeyId::StickClick,
     ];
+
+    /// Keys only the Tartarus V2 Pro has.
+    pub fn is_v2_pro_only(self) -> bool {
+        matches!(
+            self,
+            Self::Kp21
+                | Self::Kp22
+                | Self::Kp23
+                | Self::Kp24
+                | Self::Kp25
+                | Self::Kp26
+                | Self::Kp27
+                | Self::StickClick
+        )
+    }
+
+    /// The thumbstick's directions and its click.
+    pub fn is_stick(self) -> bool {
+        self.is_analog() || self == Self::StickClick
+    }
 
     pub fn is_analog(self) -> bool {
         matches!(
@@ -435,6 +515,7 @@ pub enum GameId {
     GuildWars2,
     ElderScrollsOnline,
     Minecraft,
+    Deadlock,
     /// A profile the user made, not one from the shipped pack.
     Custom,
 }
@@ -446,6 +527,8 @@ struct ProfileDe {
     game: GameId,
     device_models: Vec<DeviceModel>,
     bindings: BTreeMap<String, Action>,
+    #[serde(default)]
+    model_bindings: BTreeMap<DeviceModel, BTreeMap<String, Action>>,
     lighting: Lighting,
     #[serde(default)]
     setup_note: Option<String>,
@@ -461,6 +544,12 @@ pub struct Profile {
     pub game: GameId,
     pub device_models: Vec<DeviceModel>,
     pub bindings: BTreeMap<KeyId, Action>,
+    /// A layout of its own for one model, used on that model instead of
+    /// `bindings`. The V2 Pro's face is shaped differently from the V2's, so
+    /// a shipped profile can place its keys for that pad on their own. A
+    /// model without an entry here uses `bindings`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_bindings: BTreeMap<DeviceModel, BTreeMap<KeyId, Action>>,
     pub lighting: Lighting,
     /// A one-line step the player must take in the game before this layout
     /// works, such as adding a second key for an action that defaults to a
@@ -480,24 +569,32 @@ pub struct Profile {
 
 impl From<ProfileDe> for Profile {
     fn from(raw: ProfileDe) -> Self {
-        let mut bindings = BTreeMap::new();
         let mut unknown_key_ids = false;
-        for (key, action) in raw.bindings {
-            match KeyId::from_binding_key(&key) {
-                Some(id) => {
-                    bindings.insert(id, action);
-                }
-                None => {
-                    unknown_key_ids = true;
+        let mut parse = |raw: BTreeMap<String, Action>| {
+            let mut out = BTreeMap::new();
+            for (key, action) in raw {
+                match KeyId::from_binding_key(&key) {
+                    Some(id) => {
+                        out.insert(id, action);
+                    }
+                    None => unknown_key_ids = true,
                 }
             }
-        }
+            out
+        };
+        let bindings = parse(raw.bindings);
+        let model_bindings = raw
+            .model_bindings
+            .into_iter()
+            .map(|(model, layout)| (model, parse(layout)))
+            .collect();
         Self {
             id: raw.id,
             name: raw.name,
             game: raw.game,
             device_models: raw.device_models,
             bindings,
+            model_bindings,
             lighting: raw.lighting,
             setup_note: raw.setup_note,
             shipped_revision: raw.shipped_revision,

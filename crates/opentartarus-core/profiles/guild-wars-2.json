@@ -2,7 +2,7 @@
   "id": "guild-wars-2",
   "name": "Guild Wars 2",
   "game": "guild-wars-2",
-  "device_models": ["v2", "pro"],
+  "device_models": ["v2", "pro", "v2pro"],
   "bindings": {
     "kp01": { "type": "key", "key": "1", "modifiers": [] },
     "kp02": { "type": "key", "key": "2", "modifiers": [] },
@@ -28,6 +28,36 @@
     "thumb_w": { "type": "key", "key": "a", "modifiers": [] },
     "thumb_s": { "type": "key", "key": "s", "modifiers": [] },
     "thumb_e": { "type": "key", "key": "d", "modifiers": [] }
+  },
+  "model_bindings": {
+    "v2pro": {
+      "kp21": { "type": "key", "key": "escape", "modifiers": [] },
+      "kp22": { "type": "key", "key": "f4", "modifiers": [] },
+      "kp06": { "type": "key", "key": "6", "modifiers": [] },
+      "kp07": { "type": "key", "key": "7", "modifiers": [] },
+      "kp08": { "type": "key", "key": "8", "modifiers": [] },
+      "kp09": { "type": "key", "key": "9", "modifiers": [] },
+      "kp10": { "type": "key", "key": "0", "modifiers": [] },
+      "kp11": { "type": "key", "key": "1", "modifiers": [] },
+      "kp12": { "type": "key", "key": "2", "modifiers": [] },
+      "kp13": { "type": "key", "key": "3", "modifiers": [] },
+      "kp14": { "type": "key", "key": "4", "modifiers": [] },
+      "kp15": { "type": "key", "key": "5", "modifiers": [] },
+      "kp16": { "type": "key", "key": "v", "modifiers": [] },
+      "kp17": { "type": "key", "key": "f1", "modifiers": [] },
+      "kp18": { "type": "key", "key": "f2", "modifiers": [] },
+      "kp19": { "type": "key", "key": "f3", "modifiers": [] },
+      "kp24": { "type": "key", "key": "f", "modifiers": [] },
+      "kp25": { "type": "key", "key": "grave", "modifiers": [] },
+      "kp26": { "type": "key", "key": "x", "modifiers": [] },
+      "kp27": { "type": "key", "key": "f5", "modifiers": [] },
+      "kp20": { "type": "key", "key": "space", "modifiers": [] },
+      "analog_up": { "type": "key", "key": "w", "modifiers": [] },
+      "analog_left": { "type": "key", "key": "a", "modifiers": [] },
+      "analog_down": { "type": "key", "key": "s", "modifiers": [] },
+      "analog_right": { "type": "key", "key": "d", "modifiers": [] },
+      "stick_click": { "type": "key", "key": "v", "modifiers": [] }
+    }
   },
   "lighting": {"effect": "static", "brightness": 80, "color": [190, 30, 45]}
 }

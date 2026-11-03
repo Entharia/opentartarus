@@ -2,6 +2,7 @@ pub const APP_NAME: &str = "opentartarus";
 pub const USB_VID_RAZER: u16 = 0x1532;
 pub const USB_PID_TARTARUS_V2: u16 = 0x022b;
 pub const USB_PID_TARTARUS_PRO: u16 = 0x0244;
+pub const USB_PID_TARTARUS_V2_PRO: u16 = 0x02eb;
 pub const USB_PID_NAGA_PRO_1: u16 = 0x008f;
 pub const USB_PID_NAGA_PRO_2: u16 = 0x0090;
 pub const RECORD_TIMEOUT_MS: u64 = 8000;

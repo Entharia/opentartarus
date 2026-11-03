@@ -20,6 +20,7 @@ const ABS_FIELD: &str = "ABS=";
 const REL_FIELD: &str = "REL=";
 const LED_FIELD: &str = "LED=";
 const HANDLER_MOUSE_PREFIX: &str = "mouse";
+const HANDLER_JOYSTICK_PREFIX: &str = "js";
 const FUSER_HEADER_USER: &str = "USER";
 const FUSER_HEADER_COMMAND: &str = "COMMAND";
 const OPENRAZER_COMM_PREFIX: &str = "openrazer";
@@ -39,6 +40,9 @@ pub struct Detected {
     pub pid: u16,
     pub nodes: Vec<PathBuf>,
     pub grab_nodes: Vec<PathBuf>,
+    /// The nodes in `grab_nodes` that are a gamepad (the V2 Pro's thumbstick).
+    /// The daemon holds these only while the profile binds the stick.
+    pub gamepad_nodes: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +50,8 @@ pub enum NodeRole {
     BootKeyboard,
     ExtraKeys,
     Mouse,
+    /// A joystick node (`js` handler), such as the V2 Pro's thumbstick.
+    Gamepad,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,11 +83,7 @@ pub struct DeviceUiState {
 }
 
 pub fn model_from_pid(pid: u16) -> Option<DeviceModel> {
-    match pid {
-        opentartarus_core::constants::USB_PID_TARTARUS_V2 => Some(DeviceModel::V2),
-        opentartarus_core::constants::USB_PID_TARTARUS_PRO => Some(DeviceModel::Pro),
-        _ => None,
-    }
+    DeviceModel::from_usb_pid(pid)
 }
 
 pub fn classify_input_id(vid: u16, pid: u16) -> Option<DeviceModel> {
@@ -125,7 +127,14 @@ pub fn node_role_from_proc_block(block: &str) -> NodeRole {
     let has_rel = block_has_field(block, REL_FIELD);
     let has_led = block_has_field(block, LED_FIELD);
     let has_mouse = handler_tokens(block).any(|token| token.starts_with(HANDLER_MOUSE_PREFIX));
-    if has_abs {
+    let has_joystick = handler_tokens(block).any(|token| {
+        token
+            .strip_prefix(HANDLER_JOYSTICK_PREFIX)
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if has_joystick {
+        NodeRole::Gamepad
+    } else if has_abs {
         NodeRole::ExtraKeys
     } else if has_mouse || (has_rel && !has_led) {
         NodeRole::Mouse
@@ -273,6 +282,7 @@ pub fn hid_catalog_from_names(names: &[&str]) -> Vec<Detected> {
             pid,
             nodes: Vec::new(),
             grab_nodes: Vec::new(),
+            gamepad_nodes: Vec::new(),
         });
     }
     out
@@ -393,9 +403,14 @@ fn detected_from_entries(
     entries: Vec<(PathBuf, NodeRole)>,
 ) -> Detected {
     let nodes: Vec<PathBuf> = entries.iter().map(|(path, _)| path.clone()).collect();
+    let gamepad_nodes: Vec<PathBuf> = entries
+        .iter()
+        .filter(|(_, role)| *role == NodeRole::Gamepad)
+        .map(|(path, _)| path.clone())
+        .collect();
     let mut grab_nodes: Vec<PathBuf> = entries
         .into_iter()
-        .filter(|(_, role)| matches!(role, NodeRole::ExtraKeys | NodeRole::Mouse))
+        .filter(|(_, role)| is_remap_node(model, *role))
         .map(|(path, _)| path)
         .collect();
     if grab_nodes.is_empty() {
@@ -407,6 +422,20 @@ fn detected_from_entries(
         pid,
         nodes,
         grab_nodes,
+        gamepad_nodes,
+    }
+}
+
+/// Which nodes carry the presses the daemon remaps. The V2 and Pro send
+/// their keys on the extra-keys node, and OpenRazer holds the boot keyboard.
+/// The V2 Pro sends its keys on the boot keyboard and its stick on a gamepad
+/// node, so it needs every node.
+fn is_remap_node(model: DeviceModel, role: NodeRole) -> bool {
+    match model {
+        DeviceModel::V2Pro => true,
+        DeviceModel::V2 | DeviceModel::Pro => {
+            matches!(role, NodeRole::ExtraKeys | NodeRole::Mouse)
+        }
     }
 }
 
@@ -549,6 +578,7 @@ H: Handlers=sysrq kbd event273
             pid: USB_PID_TARTARUS_V2,
             nodes: nodes.iter().map(PathBuf::from).collect(),
             grab_nodes: Vec::new(),
+            gamepad_nodes: Vec::new(),
         }
     }
 
@@ -574,9 +604,64 @@ H: Handlers=sysrq kbd event273
             pid: USB_PID_TARTARUS_PRO,
             nodes: vec![],
             grab_nodes: vec![],
+            gamepad_nodes: vec![],
         };
         let b = v2_detected(&[]);
         assert_eq!(pick_first(vec![a, b]).unwrap().model, DeviceModel::Pro);
+    }
+
+    /// Trimmed from a real V2 Pro's /proc/bus/input/devices.
+    const PROC_V2_PRO: &str = "\
+I: Bus=0003 Vendor=1532 Product=02eb Version=0101
+N: Name=\"Generic X-Box pad\"
+H: Handlers=event6 js0
+B: EV=20000b
+
+I: Bus=0003 Vendor=1532 Product=02eb Version=0100
+N: Name=\"Razer Razer Tartarus V2 Pro Keyboard\"
+H: Handlers=sysrq kbd leds event25
+B: EV=12001f
+B: REL=1040
+B: ABS=100000000
+B: LED=7
+
+I: Bus=0003 Vendor=1532 Product=02eb Version=0100
+N: Name=\"Razer Razer Tartarus V2 Pro Mouse\"
+H: Handlers=event26 mouse0
+B: EV=17
+B: REL=903
+
+I: Bus=0003 Vendor=1532 Product=02eb Version=0100
+N: Name=\"Razer Razer Tartarus V2 Pro\"
+H: Handlers=event27
+B: EV=9
+B: ABS=10000000000
+
+I: Bus=0003 Vendor=1532 Product=02eb Version=0111
+N: Name=\"Razer Razer Tartarus V2 Pro\"
+H: Handlers=sysrq kbd leds event28
+B: EV=120013
+B: LED=7
+";
+
+    #[test]
+    fn v2_pro_grabs_its_boot_keyboard_and_marks_the_gamepad() {
+        use opentartarus_core::constants::USB_PID_TARTARUS_V2_PRO;
+        let found = parse_proc_input_devices(PROC_V2_PRO);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].model, DeviceModel::V2Pro);
+        assert_eq!(found[0].pid, USB_PID_TARTARUS_V2_PRO);
+        let all: Vec<PathBuf> = ["event6", "event25", "event26", "event27", "event28"]
+            .iter()
+            .map(|name| PathBuf::from("/dev/input").join(name))
+            .collect();
+        assert_eq!(found[0].nodes, all);
+        // event28 is the boot keyboard, and it is where the V2 Pro's keys arrive.
+        assert_eq!(grab_targets(&found[0]), all.as_slice());
+        assert_eq!(
+            found[0].gamepad_nodes,
+            vec![PathBuf::from("/dev/input/event6")]
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::types::{KeyId, KeyToken, Modifier, MouseButton};
+use crate::types::{DeviceModel, KeyId, KeyToken, Modifier, MouseButton};
 use std::collections::BTreeMap;
 
 pub const EV_KEY: u16 = 1;
@@ -12,8 +12,13 @@ pub const ABS_Y: u16 = 1;
 pub const ABS_HAT0X: u16 = 16;
 pub const ABS_HAT0Y: u16 = 17;
 
+/// The Tartarus Pro's analog stick reports 0..=255 around 128.
 const ANALOG_AXIS_CENTER: i32 = 128;
 const ANALOG_AXIS_MAX: i32 = 255;
+/// The Tartarus V2 Pro's thumbstick is a gamepad (xpad) stick: -32768..=32767
+/// around 0, with up and left negative.
+const GAMEPAD_AXIS_CENTER: i32 = 0;
+const GAMEPAD_AXIS_MAX: i32 = 32767;
 
 const KEY_ESC: u16 = 1;
 const KEY_1: u16 = 2;
@@ -122,6 +127,8 @@ const KEY_PAUSE: u16 = 119;
 const KEY_LEFTMETA: u16 = 125;
 const KEY_RIGHTMETA: u16 = 126;
 const KEY_F24: u16 = 194;
+/// The gamepad's left-stick click. The V2 Pro's thumbstick click sends it.
+pub const BTN_THUMBL: u16 = 317;
 
 pub const BTN_LEFT: u16 = 272;
 pub const BTN_RIGHT: u16 = 273;
@@ -162,6 +169,41 @@ const V2_KEYS: &[(KeyId, u16, u16)] = &[
     (KeyId::Mode, EV_KEY, KEY_F24),
 ];
 
+/// What the Tartarus V2 Pro sends on its own, with no software running:
+/// the left of a keyboard. Each key is given the `KeyId` of the V2 key that
+/// sends the same thing, so every profile built for the V2 lands on the same
+/// keys. The seven keys the V2 does not have get `kp21`-`kp27`.
+const V2_PRO_KEYS: &[(KeyId, u16, u16)] = &[
+    (KeyId::Kp01, EV_KEY, KEY_1),
+    (KeyId::Kp02, EV_KEY, KEY_2),
+    (KeyId::Kp03, EV_KEY, KEY_3),
+    (KeyId::Kp04, EV_KEY, KEY_4),
+    (KeyId::Kp05, EV_KEY, KEY_5),
+    (KeyId::Kp06, EV_KEY, KEY_TAB),
+    (KeyId::Kp07, EV_KEY, KEY_Q),
+    (KeyId::Kp08, EV_KEY, KEY_W),
+    (KeyId::Kp09, EV_KEY, KEY_E),
+    (KeyId::Kp10, EV_KEY, KEY_R),
+    (KeyId::Kp11, EV_KEY, KEY_CAPSLOCK),
+    (KeyId::Kp12, EV_KEY, KEY_A),
+    (KeyId::Kp13, EV_KEY, KEY_S),
+    (KeyId::Kp14, EV_KEY, KEY_D),
+    (KeyId::Kp15, EV_KEY, KEY_F),
+    (KeyId::Kp16, EV_KEY, KEY_LEFTSHIFT),
+    (KeyId::Kp17, EV_KEY, KEY_Z),
+    (KeyId::Kp18, EV_KEY, KEY_X),
+    (KeyId::Kp19, EV_KEY, KEY_C),
+    (KeyId::Kp20, EV_KEY, KEY_SPACE),
+    (KeyId::Kp21, EV_KEY, KEY_GRAVE),
+    (KeyId::Kp22, EV_KEY, KEY_T),
+    (KeyId::Kp23, EV_KEY, KEY_G),
+    (KeyId::Kp24, EV_KEY, KEY_V),
+    (KeyId::Kp25, EV_KEY, KEY_LEFTCTRL),
+    (KeyId::Kp26, EV_KEY, KEY_B),
+    (KeyId::Kp27, EV_KEY, KEY_I),
+    (KeyId::StickClick, EV_KEY, BTN_THUMBL),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvdevTuple {
     pub ev_type: u16,
@@ -181,6 +223,18 @@ impl KeyMap {
 
     pub fn pro() -> Self {
         Self::from_table(V2_KEYS)
+    }
+
+    pub fn v2_pro() -> Self {
+        Self::from_table(V2_PRO_KEYS)
+    }
+
+    pub fn for_model(model: DeviceModel) -> Self {
+        match model {
+            DeviceModel::V2 => Self::v2(),
+            DeviceModel::Pro => Self::pro(),
+            DeviceModel::V2Pro => Self::v2_pro(),
+        }
     }
 
     fn from_table(table: &[(KeyId, u16, u16)]) -> Self {
@@ -363,6 +417,25 @@ pub fn analog_axis_ratio(value: i32) -> f32 {
     (value - ANALOG_AXIS_CENTER) as f32 / travel
 }
 
+/// The resting value of a model's stick axes.
+pub fn analog_axis_center(model: DeviceModel) -> i32 {
+    match model {
+        DeviceModel::V2Pro => GAMEPAD_AXIS_CENTER,
+        DeviceModel::V2 | DeviceModel::Pro => ANALOG_AXIS_CENTER,
+    }
+}
+
+/// How far a model's stick is pushed, from -1.0 to 1.0. Negative is up or left.
+pub fn analog_axis_ratio_for(model: DeviceModel, value: i32) -> f32 {
+    match model {
+        DeviceModel::V2Pro => {
+            let travel = (GAMEPAD_AXIS_MAX - GAMEPAD_AXIS_CENTER) as f32;
+            ((value - GAMEPAD_AXIS_CENTER) as f32 / travel).clamp(-1.0, 1.0)
+        }
+        DeviceModel::V2 | DeviceModel::Pro => analog_axis_ratio(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +475,75 @@ mod tests {
         assert!(!v2.contains(KeyId::AnalogUp));
         assert!(!pro.contains(KeyId::ThumbN));
         assert!(!pro.contains(KeyId::AnalogUp));
+    }
+
+    #[test]
+    fn v2_pro_fixture_matches_what_the_pad_sends() {
+        let map = KeyMap::v2_pro();
+        // Recorded from a real V2 Pro (1532:02eb), row by row.
+        let rows: [&[(u16, KeyId)]; 5] = [
+            &[
+                (KEY_GRAVE, KeyId::Kp21),
+                (KEY_1, KeyId::Kp01),
+                (KEY_2, KeyId::Kp02),
+                (KEY_3, KeyId::Kp03),
+                (KEY_4, KeyId::Kp04),
+                (KEY_5, KeyId::Kp05),
+            ],
+            &[
+                (KEY_TAB, KeyId::Kp06),
+                (KEY_Q, KeyId::Kp07),
+                (KEY_W, KeyId::Kp08),
+                (KEY_E, KeyId::Kp09),
+                (KEY_R, KeyId::Kp10),
+                (KEY_T, KeyId::Kp22),
+            ],
+            &[
+                (KEY_CAPSLOCK, KeyId::Kp11),
+                (KEY_A, KeyId::Kp12),
+                (KEY_S, KeyId::Kp13),
+                (KEY_D, KeyId::Kp14),
+                (KEY_F, KeyId::Kp15),
+                (KEY_G, KeyId::Kp23),
+            ],
+            &[
+                (KEY_LEFTSHIFT, KeyId::Kp16),
+                (KEY_Z, KeyId::Kp17),
+                (KEY_X, KeyId::Kp18),
+                (KEY_C, KeyId::Kp19),
+                (KEY_V, KeyId::Kp24),
+            ],
+            &[
+                (KEY_LEFTCTRL, KeyId::Kp25),
+                (KEY_B, KeyId::Kp26),
+                (KEY_I, KeyId::Kp27),
+                (KEY_SPACE, KeyId::Kp20),
+            ],
+        ];
+        for row in rows {
+            for (code, id) in row {
+                assert_eq!(map.get(EV_KEY, *code, 1), Some(*id), "code {code}");
+            }
+        }
+        assert_eq!(map.get(EV_KEY, BTN_THUMBL, 1), Some(KeyId::StickClick));
+        for id in KeyId::ALL {
+            if id.is_analog() {
+                continue;
+            }
+            assert_eq!(
+                map.contains(id),
+                DeviceModel::V2Pro.has_key(id),
+                "V2 Pro map and has_key disagree on {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gamepad_stick_ratio_is_centred_on_zero() {
+        assert_eq!(analog_axis_ratio_for(DeviceModel::V2Pro, 0), 0.0);
+        assert!((analog_axis_ratio_for(DeviceModel::V2Pro, 32767) - 1.0).abs() < 1e-6);
+        assert!(analog_axis_ratio_for(DeviceModel::V2Pro, -32768) <= -1.0);
+        assert!((analog_axis_ratio_for(DeviceModel::Pro, 255) - 1.0).abs() < 1e-6);
     }
 
     fn keypad_and_wheel_mode() -> [KeyId; 24] {

@@ -9,7 +9,7 @@ use iced::widget::{
     button, column, container, pick_list, row, scrollable, text, text_input, Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
-use opentartarus_core::labels::{bind_label, key_display_name, key_position_text};
+use opentartarus_core::labels::{bind_label, key_display_name_for, key_position_text_for};
 use opentartarus_core::types::{Action, KeyToken, MouseButton, MouseTarget, ScrollDir};
 
 pub const MOUSE_TARGETS: [(&str, MouseTarget); 7] = [
@@ -358,8 +358,8 @@ pub fn inspector(app: &App) -> Element<'_, Message> {
 
             let mut panel = column![
                 row![
-                    text(key_display_name(key_id)).size(theme::TEXT_TITLE),
-                    text(key_position_text(key_id))
+                    text(key_display_name_for(app.model, key_id)).size(theme::TEXT_TITLE),
+                    text(key_position_text_for(app.model, key_id))
                         .size(theme::TEXT_SMALL)
                         .color(theme::COLOR_TEXT_FAINT),
                 ]

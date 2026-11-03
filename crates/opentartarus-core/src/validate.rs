@@ -31,16 +31,43 @@ impl Profile {
         for action in self.bindings.values() {
             validate_action(action)?;
         }
+        for (model, layout) in &self.model_bindings {
+            // A model's own layout is only for a pad the profile supports,
+            // and only names keys that pad has.
+            if !self.device_models.contains(model) {
+                return Err(ErrorCode::InvalidProfile);
+            }
+            for (key, action) in layout {
+                if !model.has_key(*key) {
+                    return Err(ErrorCode::UnknownKey);
+                }
+                validate_action(action)?;
+            }
+        }
         Ok(())
     }
 
+    /// The layout used on `model`: its own one if the profile has it,
+    /// otherwise the shared `bindings`. With no model known, the shared one.
+    pub fn layout(&self, model: Option<DeviceModel>) -> &BTreeMap<KeyId, Action> {
+        model
+            .and_then(|m| self.model_bindings.get(&m))
+            .unwrap_or(&self.bindings)
+    }
+
+    /// The layout an edit made on `model` changes, chosen the same way as
+    /// `layout`, so an edit lands in the layout the pad is using.
+    pub fn layout_mut(&mut self, model: Option<DeviceModel>) -> &mut BTreeMap<KeyId, Action> {
+        match model.filter(|m| self.model_bindings.contains_key(m)) {
+            Some(m) => self.model_bindings.entry(m).or_default(),
+            None => &mut self.bindings,
+        }
+    }
+
     pub fn bindings_for_model(&self, model: DeviceModel) -> BTreeMap<KeyId, Action> {
-        self.bindings
+        self.layout(Some(model))
             .iter()
-            .filter(|(key, _)| match model {
-                DeviceModel::V2 => !key.is_analog(),
-                DeviceModel::Pro => !key.is_thumb(),
-            })
+            .filter(|(key, _)| model.has_key(**key))
             .map(|(key, action)| (*key, action.clone()))
             .collect()
     }
@@ -386,6 +413,76 @@ mod tests {
         assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
         p.setup_note = Some("x".repeat(SETUP_NOTE_MAX_LEN + 1));
         assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
+    }
+
+    #[test]
+    fn a_model_layout_replaces_the_shared_one_on_that_model_only() {
+        let mut p: Profile = serde_json::from_str(lol_json()).unwrap();
+        p.device_models = DeviceModel::ALL.to_vec();
+        let shared = p.bindings.clone();
+        let mine = BTreeMap::from([(
+            KeyId::StickClick,
+            Action::Key {
+                key: crate::types::KeyToken::Space,
+                modifiers: vec![],
+            },
+        )]);
+        p.model_bindings.insert(DeviceModel::V2Pro, mine.clone());
+        assert!(p.validate().is_ok());
+        assert_eq!(p.layout(Some(DeviceModel::V2Pro)), &mine);
+        assert_eq!(p.bindings_for_model(DeviceModel::V2Pro), mine);
+        assert_eq!(p.layout(Some(DeviceModel::V2)), &shared);
+        assert_eq!(p.layout(None), &shared);
+
+        p.layout_mut(Some(DeviceModel::V2Pro))
+            .remove(&KeyId::StickClick);
+        assert!(p.model_bindings[&DeviceModel::V2Pro].is_empty());
+        assert_eq!(p.bindings, shared, "editing the V2 Pro leaves the rest");
+        p.layout_mut(Some(DeviceModel::Pro)).remove(&KeyId::Kp01);
+        assert!(!p.bindings.contains_key(&KeyId::Kp01));
+        assert!(!p.model_bindings.contains_key(&DeviceModel::Pro));
+
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json["model_bindings"]["v2pro"].is_object());
+        let back: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(back, p, "a model layout survives a save");
+        p.model_bindings.clear();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("model_bindings").is_none(), "none, no field");
+    }
+
+    #[test]
+    fn a_model_layout_must_fit_its_pad() {
+        let mut p: Profile = serde_json::from_str(lol_json()).unwrap();
+        let space = Action::Key {
+            key: crate::types::KeyToken::Space,
+            modifiers: vec![],
+        };
+        p.model_bindings.insert(
+            DeviceModel::V2Pro,
+            BTreeMap::from([(KeyId::Kp21, space.clone())]),
+        );
+        assert_eq!(
+            p.validate().unwrap_err(),
+            ErrorCode::InvalidProfile,
+            "a layout for a pad the profile does not support"
+        );
+        p.device_models.push(DeviceModel::V2Pro);
+        assert!(p.validate().is_ok());
+        p.model_bindings
+            .get_mut(&DeviceModel::V2Pro)
+            .unwrap()
+            .insert(KeyId::ThumbN, space);
+        assert_eq!(
+            p.validate().unwrap_err(),
+            ErrorCode::UnknownKey,
+            "the V2 Pro has no thumb pad"
+        );
+        let raw = r#"{"id":"x","name":"x","game":"default","device_models":["v2pro"],
+            "bindings":{},"model_bindings":{"v2pro":{"kp99":{"type":"key","key":"a","modifiers":[]}}},
+            "lighting":{"effect":"none","brightness":80}}"#;
+        let bad: Profile = serde_json::from_str(raw).unwrap();
+        assert_eq!(bad.validate().unwrap_err(), ErrorCode::InvalidProfile);
     }
 
     #[test]

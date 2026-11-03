@@ -1,5 +1,7 @@
 use crate::pack::SHIPPED_IDS;
-use crate::types::{Action, KeyId, KeyToken, Modifier, MouseButton, MouseTarget, ScrollDir};
+use crate::types::{
+    Action, DeviceModel, KeyId, KeyToken, Modifier, MouseButton, MouseTarget, ScrollDir,
+};
 
 /// The four rows on the face of the pad. `kp20` is not here: it is the thumb
 /// key, which sits below the rows on the physical device.
@@ -26,7 +28,62 @@ const GRID_ROW_KEYS: [KeyId; 19] = [
     KeyId::Kp19,
 ];
 
+/// The Tartarus V2 Pro's face, row by row, left to right, as the keys sit on
+/// the pad. Its keys carry the ids of the V2 keys that send the same thing
+/// (see `keymap`), so the ids are not in reading order; this table is.
+pub const V2_PRO_ROWS: [&[KeyId]; 5] = [
+    &[
+        KeyId::Kp21,
+        KeyId::Kp01,
+        KeyId::Kp02,
+        KeyId::Kp03,
+        KeyId::Kp04,
+        KeyId::Kp05,
+    ],
+    &[
+        KeyId::Kp06,
+        KeyId::Kp07,
+        KeyId::Kp08,
+        KeyId::Kp09,
+        KeyId::Kp10,
+        KeyId::Kp22,
+    ],
+    &[
+        KeyId::Kp11,
+        KeyId::Kp12,
+        KeyId::Kp13,
+        KeyId::Kp14,
+        KeyId::Kp15,
+        KeyId::Kp23,
+    ],
+    &[
+        KeyId::Kp16,
+        KeyId::Kp17,
+        KeyId::Kp18,
+        KeyId::Kp19,
+        KeyId::Kp24,
+    ],
+    &[KeyId::Kp25, KeyId::Kp26, KeyId::Kp27, KeyId::Kp20],
+];
+
+/// Where `id` sits on the V2 Pro's face: `(row, column)`, both from zero.
+pub fn v2_pro_grid_position(id: KeyId) -> Option<(usize, usize)> {
+    V2_PRO_ROWS.iter().enumerate().find_map(|(row, keys)| {
+        keys.iter()
+            .position(|candidate| *candidate == id)
+            .map(|column| (row, column))
+    })
+}
+
+/// The 1-based number of `id` counted along the V2 Pro's rows.
+pub fn v2_pro_key_number(id: KeyId) -> Option<usize> {
+    let (row, column) = v2_pro_grid_position(id)?;
+    let before: usize = V2_PRO_ROWS[..row].iter().map(|keys| keys.len()).sum();
+    Some(before + column + 1)
+}
+
 const POSITION_THUMB_KEY: &str = "thumb key";
+const POSITION_THUMBSTICK: &str = "thumbstick";
 const POSITION_THUMB_PAD: &str = "thumb pad";
 const POSITION_ANALOG: &str = "analog stick";
 const POSITION_WHEEL: &str = "wheel";
@@ -61,6 +118,14 @@ pub fn key_display_name(id: KeyId) -> String {
         KeyId::Kp18 => String::from("Key 18"),
         KeyId::Kp19 => String::from("Key 19"),
         KeyId::Kp20 => String::from("Key 20"),
+        KeyId::Kp21 => String::from("Key 21"),
+        KeyId::Kp22 => String::from("Key 22"),
+        KeyId::Kp23 => String::from("Key 23"),
+        KeyId::Kp24 => String::from("Key 24"),
+        KeyId::Kp25 => String::from("Key 25"),
+        KeyId::Kp26 => String::from("Key 26"),
+        KeyId::Kp27 => String::from("Key 27"),
+        KeyId::StickClick => String::from("Stick click"),
         KeyId::WheelUp => String::from("Wheel up"),
         KeyId::WheelDown => String::from("Wheel down"),
         KeyId::WheelClick => String::from("Wheel click"),
@@ -77,6 +142,44 @@ pub fn key_display_name(id: KeyId) -> String {
         KeyId::AnalogDown => String::from("Analog down"),
         KeyId::AnalogLeft => String::from("Analog left"),
         KeyId::AnalogRight => String::from("Analog right"),
+    }
+}
+
+/// The inspector heading for `id` on `model`. The V2 Pro numbers its keys
+/// along its own rows, so the same id has a different number there.
+pub fn key_display_name_for(model: Option<DeviceModel>, id: KeyId) -> String {
+    if model == Some(DeviceModel::V2Pro) {
+        if let Some(number) = v2_pro_key_number(id) {
+            return format!("Key {number:02}");
+        }
+        if let Some(name) = v2_pro_stick_name(id) {
+            return String::from(name);
+        }
+    }
+    key_display_name(id)
+}
+
+/// Where `id` sits on `model`, shown under the inspector heading.
+pub fn key_position_text_for(model: Option<DeviceModel>, id: KeyId) -> String {
+    if model == Some(DeviceModel::V2Pro) {
+        if let Some((row, column)) = v2_pro_grid_position(id) {
+            return format!("row {} · key {}", row + 1, column + 1);
+        }
+        if id.is_stick() {
+            return String::from(POSITION_THUMBSTICK);
+        }
+    }
+    key_position_text(id)
+}
+
+fn v2_pro_stick_name(id: KeyId) -> Option<&'static str> {
+    match id {
+        KeyId::AnalogUp => Some("Stick up"),
+        KeyId::AnalogDown => Some("Stick down"),
+        KeyId::AnalogLeft => Some("Stick left"),
+        KeyId::AnalogRight => Some("Stick right"),
+        KeyId::StickClick => Some("Stick click"),
+        _ => None,
     }
 }
 
@@ -100,6 +203,10 @@ pub fn key_position_text(id: KeyId) -> String {
         KeyId::AnalogUp | KeyId::AnalogDown | KeyId::AnalogLeft | KeyId::AnalogRight => {
             String::from(POSITION_ANALOG)
         }
+        KeyId::StickClick => String::from(POSITION_THUMBSTICK),
+        id if id.is_v2_pro_only() => v2_pro_grid_position(id)
+            .map(|(row, column)| format!("row {} · key {}", row + 1, column + 1))
+            .unwrap_or_else(|| String::from(POSITION_THUMB_PAD)),
         _ => String::from(POSITION_THUMB_PAD),
     }
 }
@@ -367,6 +474,40 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), total, "two keys must not share a display name");
+    }
+
+    #[test]
+    fn v2_pro_keys_are_numbered_along_its_own_rows() {
+        let lengths: Vec<usize> = V2_PRO_ROWS.iter().map(|keys| keys.len()).collect();
+        assert_eq!(lengths, vec![6, 6, 6, 5, 4]);
+        let pro = Some(DeviceModel::V2Pro);
+        assert_eq!(key_display_name_for(pro, KeyId::Kp21), "Key 01");
+        assert_eq!(key_position_text_for(pro, KeyId::Kp21), "row 1 · key 1");
+        assert_eq!(key_display_name_for(pro, KeyId::Kp01), "Key 02");
+        assert_eq!(key_display_name_for(pro, KeyId::Kp22), "Key 12");
+        assert_eq!(key_display_name_for(pro, KeyId::Kp20), "Key 27");
+        assert_eq!(key_position_text_for(pro, KeyId::Kp20), "row 5 · key 4");
+        assert_eq!(key_display_name_for(pro, KeyId::AnalogUp), "Stick up");
+        assert_eq!(key_position_text_for(pro, KeyId::StickClick), "thumbstick");
+        // Other models keep the names they always had.
+        let v2 = Some(DeviceModel::V2);
+        assert_eq!(key_display_name_for(v2, KeyId::Kp01), "Key 01");
+        assert_eq!(key_position_text_for(v2, KeyId::Kp20), "thumb key");
+    }
+
+    #[test]
+    fn every_v2_pro_key_is_on_its_face_once() {
+        let mut seen = Vec::new();
+        for id in KeyId::ALL {
+            let on_face = v2_pro_grid_position(id).is_some();
+            let expected = DeviceModel::V2Pro.has_key(id) && !id.is_stick();
+            assert_eq!(on_face, expected, "{id:?}");
+            if on_face {
+                seen.push(v2_pro_key_number(id).unwrap());
+            }
+        }
+        seen.sort();
+        assert_eq!(seen, (1..=27).collect::<Vec<_>>());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use opentartarus_core::constants::{USB_PID_TARTARUS_PRO, USB_PID_TARTARUS_V2, USB_VID_RAZER};
+use opentartarus_core::constants::USB_VID_RAZER;
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::{EventMethod, Method};
 use opentartarus_core::keymap::{mouse_button_to_evdev, EV_KEY, EV_REL, REL_WHEEL};
@@ -85,17 +85,11 @@ fn device_event_params<L: LightingClient>(state: &DaemonState<L>) -> serde_json:
         return json!({ "present": false, "model": null, "vid": null, "pid": null });
     }
     match state.model {
-        Some(DeviceModel::V2) => json!({
+        Some(model) => json!({
             "present": true,
-            "model": DeviceModel::V2,
+            "model": model,
             "vid": usb_id_hex(USB_VID_RAZER),
-            "pid": usb_id_hex(USB_PID_TARTARUS_V2),
-        }),
-        Some(DeviceModel::Pro) => json!({
-            "present": true,
-            "model": DeviceModel::Pro,
-            "vid": usb_id_hex(USB_VID_RAZER),
-            "pid": usb_id_hex(USB_PID_TARTARUS_PRO),
+            "pid": usb_id_hex(model.usb_pid()),
         }),
         None => json!({ "present": true, "model": null, "vid": null, "pid": null }),
     }
@@ -329,6 +323,9 @@ fn device_loop(
     let mut grabbed: Vec<evdev::Device> = Vec::new();
     let mut grabbed_ids: Option<(u16, u16, DeviceModel)> = None;
     let mut grabbed_nodes: Vec<PathBuf> = Vec::new();
+    // Indexes into `grabbed` of gamepad nodes, and whether they are held.
+    let mut gamepad_idx: Vec<usize> = Vec::new();
+    let mut gamepad_held = false;
     let mut last_ui: Option<DeviceUiState> = None;
 
     while !quit.load(Ordering::SeqCst) {
@@ -344,6 +341,13 @@ fn device_loop(
                             grabbed = devices;
                             grabbed_ids = Some((detected.vid, detected.pid, detected.model));
                             grabbed_nodes = grab_targets(&detected).to_vec();
+                            gamepad_idx = grabbed_nodes
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, path)| detected.gamepad_nodes.contains(path))
+                                .map(|(index, _)| index)
+                                .collect();
+                            gamepad_held = true;
                             last_ui = Some(device_ui_state(
                                 DetectStatus::Present,
                                 Some(detected.model),
@@ -418,6 +422,14 @@ fn device_loop(
             grabbed.clear();
             continue;
         };
+
+        if !gamepad_idx.is_empty() {
+            let want = state.lock().expect("daemon state").engine.binds_stick();
+            if want != gamepad_held {
+                hold_gamepads(&mut grabbed, &gamepad_idx, want);
+                gamepad_held = want;
+            }
+        }
 
         let mut pending = Vec::new();
         let mut disconnect = false;
@@ -593,6 +605,22 @@ fn grab_nodes(nodes: &[PathBuf]) -> Result<Vec<evdev::Device>, GrabFail> {
         }
     }
     Ok(devices)
+}
+
+/// Takes the gamepad nodes from games while the profile remaps the stick, and
+/// gives them back when it does not, so an unbound stick still works as a
+/// gamepad. The daemon keeps reading them either way; the remap engine drops
+/// stick input it has no binding for.
+fn hold_gamepads(devices: &mut [evdev::Device], indexes: &[usize], hold: bool) {
+    for &index in indexes {
+        let Some(device) = devices.get_mut(index) else {
+            continue;
+        };
+        let result = if hold { device.grab() } else { device.ungrab() };
+        if let Err(err) = result {
+            log::write(&ErrorCode::Io.log_line(Some(&err.to_string())));
+        }
+    }
 }
 
 fn open_and_grab(path: &PathBuf) -> std::io::Result<evdev::Device> {

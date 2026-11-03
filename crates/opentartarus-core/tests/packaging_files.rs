@@ -10,6 +10,7 @@ fn udev_rule_allow_list_only() {
         std::fs::read_to_string(packaging_path("udev/99-opentartarus.rules")).expect("udev rule");
     assert!(text.contains("idProduct}==\"022b\""));
     assert!(text.contains("idProduct}==\"0244\""));
+    assert!(text.contains("idProduct}==\"02eb\""));
     assert!(text.contains("GROUP=\"opentartarus\""));
     assert!(text.contains("KERNEL==\"uinput\""));
     assert!(!text.contains("008f"));

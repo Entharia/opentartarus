@@ -2,8 +2,7 @@
   "id": "elden-ring",
   "name": "Elden Ring",
   "game": "elden-ring",
-  "device_models": ["v2", "pro"],
-  "setup_note": "Uses the launch key layout. A save made after patch 1.12 puts Jump on Space and Dodge on Shift: set Dodge to Space and Jump to F in Key Settings.",
+  "device_models": ["v2", "pro", "v2pro"],
   "bindings": {
     "kp05": { "type": "key", "key": "g", "modifiers": [] },
     "kp06": { "type": "key", "key": "up", "modifiers": [] },
@@ -22,5 +21,28 @@
     "thumb_s": { "type": "key", "key": "s", "modifiers": [] },
     "thumb_e": { "type": "key", "key": "d", "modifiers": [] }
   },
-  "lighting": {"effect": "static", "brightness": 80, "color": [201, 168, 96]}
+  "model_bindings": {
+    "v2pro": {
+      "kp06": { "type": "key", "key": "up", "modifiers": [] },
+      "kp07": { "type": "key", "key": "down", "modifiers": [] },
+      "kp08": { "type": "key", "key": "left", "modifiers": [] },
+      "kp09": { "type": "key", "key": "right", "modifiers": [] },
+      "kp11": { "type": "key", "key": "space", "modifiers": [] },
+      "kp12": { "type": "key", "key": "r", "modifiers": [] },
+      "kp13": { "type": "key", "key": "e", "modifiers": [] },
+      "kp14": { "type": "key", "key": "f", "modifiers": [] },
+      "kp16": { "type": "key", "key": "x", "modifiers": [] },
+      "kp17": { "type": "key", "key": "g", "modifiers": [] },
+      "kp18": { "type": "key", "key": "escape", "modifiers": [] },
+      "kp19": { "type": "key", "key": "q", "modifiers": [] },
+      "kp20": { "type": "key", "key": "space", "modifiers": [] },
+      "analog_up": { "type": "key", "key": "w", "modifiers": [] },
+      "analog_left": { "type": "key", "key": "a", "modifiers": [] },
+      "analog_down": { "type": "key", "key": "s", "modifiers": [] },
+      "analog_right": { "type": "key", "key": "d", "modifiers": [] },
+      "stick_click": { "type": "key", "key": "x", "modifiers": [] }
+    }
+  },
+  "lighting": {"effect": "static", "brightness": 80, "color": [201, 168, 96]},
+  "setup_note": "Uses the launch key layout. A save made after patch 1.12 puts Jump on Space and Dodge on Shift: set Dodge to Space and Jump to F in Key Settings."
 }

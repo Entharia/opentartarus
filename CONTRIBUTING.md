@@ -61,6 +61,12 @@ Layout rules, so every profile feels the same on the pad:
 - Sprint, crouch and walk usually live on Shift and Ctrl. Bind `leftshift` and `leftctrl` for those. They are real keys here.
 - If the game needs a step the player must take inside the game before the layout works, put one sentence in `setup_note`. Keep it short. Most profiles should not need one.
 
+The Tartarus V2 Pro gets its own layout under `"model_bindings": { "v2pro": { ... } }`. Its keys carry the ids of the V2 keys that send the same thing, so they are not in reading order. Row by row, left to right, the face is `kp21 kp01-kp05`, `kp06-kp10 kp22`, `kp11-kp15 kp23`, `kp16-kp19 kp24`, `kp25 kp26 kp27 kp20`, then the stick (`analog_up`, `analog_left`, `analog_down`, `analog_right`, `stick_click`). Lay it out for a small hand:
+
+- Keys 11 to 14 are under the fingers at rest. Put the actions used most in a fight there, and the next most used straight above and below, on 6 to 9 and 16 to 19. Fill all twelve.
+- The top row (`kp21`, `kp01` to `kp05`) and the far right column (`kp22`, `kp23`) are a stretch. Put only menus, the map and chat there.
+- If the game moves with WASD, movement goes on the stick, and `stick_click` gets something used while moving, such as crouch, sprint or dodge. Space stays on `kp20`.
+
 Shipped profiles are copied into the user's config folder the first time they are applied. A user who has already applied your profile will not see later edits until they press "Revert to shipped", so get the layout right before it ships.
 
 ## Reporting a bug

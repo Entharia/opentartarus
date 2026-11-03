@@ -29,7 +29,7 @@ section = "utils"
 priority = "optional"
 depends = "$auto, udev, policykit-1"
 extended-description = """Per-game profiles and key remaps for the Razer \
-Tartarus V2 and Tartarus Pro, with lighting through OpenRazer. A tray daemon \
+Tartarus V2, Tartarus Pro and Tartarus V2 Pro, with lighting through OpenRazer. A tray daemon \
 grabs the keypad and plays the remaps; a window edits the profiles."""
 maintainer-scripts = "../../packaging/debian"
 conf-files = ["/etc/xdg/autostart/opentartarus-daemon.desktop"]

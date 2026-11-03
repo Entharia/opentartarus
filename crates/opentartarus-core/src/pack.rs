@@ -1,7 +1,7 @@
 use crate::error::ErrorCode;
 use crate::types::Profile;
 
-pub const SHIPPED_IDS: [&str; 12] = [
+pub const SHIPPED_IDS: [&str; 13] = [
     "default",
     "dota-2",
     "world-of-warcraft",
@@ -14,6 +14,7 @@ pub const SHIPPED_IDS: [&str; 12] = [
     "guild-wars-2",
     "elder-scrolls-online",
     "minecraft",
+    "deadlock",
 ];
 
 pub fn shipped_json(id: &str) -> Option<&'static str> {
@@ -30,6 +31,7 @@ pub fn shipped_json(id: &str) -> Option<&'static str> {
         "guild-wars-2" => Some(include_str!("../profiles/guild-wars-2.json")),
         "elder-scrolls-online" => Some(include_str!("../profiles/elder-scrolls-online.json")),
         "minecraft" => Some(include_str!("../profiles/minecraft.json")),
+        "deadlock" => Some(include_str!("../profiles/deadlock.json")),
         _ => None,
     }
 }
@@ -51,6 +53,7 @@ pub fn shipped_profile(id: &str) -> Result<Profile, ErrorCode> {
 mod tests {
     use super::*;
     use crate::types::{Action, DeviceModel, GameId, KeyId, KeyToken, Profile};
+    use std::collections::BTreeMap;
 
     fn key_action(token: KeyToken) -> Action {
         Action::Key {
@@ -77,7 +80,7 @@ mod tests {
         (KeyId::ThumbE, KeyToken::D),
     ];
 
-    const NEW_GAME_IDS: [&str; 7] = [
+    const NEW_GAME_IDS: [&str; 8] = [
         "overwatch-2",
         "counter-strike-2",
         "diablo-4",
@@ -85,6 +88,7 @@ mod tests {
         "guild-wars-2",
         "elder-scrolls-online",
         "minecraft",
+        "deadlock",
     ];
 
     #[test]
@@ -108,7 +112,7 @@ mod tests {
 
     #[test]
     fn shipped_ids_are_pack_order() {
-        assert_eq!(SHIPPED_IDS.len(), 12);
+        assert_eq!(SHIPPED_IDS.len(), 13);
         assert_eq!(SHIPPED_IDS[0], "default");
         assert_eq!(
             &SHIPPED_IDS[1..5],
@@ -564,6 +568,180 @@ mod tests {
         }
     }
 
+    /// The V2 Pro's home row, under the four fingers at rest, and the rows
+    /// just above and below it. With small hands these are the keys that can
+    /// be hit without moving the hand.
+    const V2_PRO_HOME: [KeyId; 4] = [KeyId::Kp11, KeyId::Kp12, KeyId::Kp13, KeyId::Kp14];
+    const V2_PRO_NEAR: [KeyId; 8] = [
+        KeyId::Kp06,
+        KeyId::Kp07,
+        KeyId::Kp08,
+        KeyId::Kp09,
+        KeyId::Kp16,
+        KeyId::Kp17,
+        KeyId::Kp18,
+        KeyId::Kp19,
+    ];
+    /// The top row and the far right column: a stretch for a small hand.
+    const V2_PRO_FAR: [KeyId; 8] = [
+        KeyId::Kp21,
+        KeyId::Kp01,
+        KeyId::Kp02,
+        KeyId::Kp03,
+        KeyId::Kp04,
+        KeyId::Kp05,
+        KeyId::Kp22,
+        KeyId::Kp23,
+    ];
+
+    fn v2_pro_layout(id: &str) -> BTreeMap<KeyId, Action> {
+        shipped_profile(id)
+            .unwrap()
+            .model_bindings
+            .get(&DeviceModel::V2Pro)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} has no V2 Pro layout"))
+    }
+
+    fn token(action: Option<&Action>) -> Option<KeyToken> {
+        match action {
+            Some(Action::Key { key, modifiers }) if modifiers.is_empty() => Some(*key),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn every_shipped_profile_has_a_v2_pro_layout_that_fits_the_pad() {
+        for id in SHIPPED_IDS {
+            let p = shipped_profile(id).unwrap();
+            assert_eq!(p.device_models, DeviceModel::ALL.to_vec(), "{id}");
+            assert_eq!(
+                p.model_bindings.keys().collect::<Vec<_>>(),
+                vec![&DeviceModel::V2Pro],
+                "{id}: only the V2 Pro has a layout of its own"
+            );
+            for (key_id, action) in v2_pro_layout(id) {
+                assert!(DeviceModel::V2Pro.has_key(key_id), "{id} {key_id:?}");
+                assert!(
+                    token(Some(&action)).is_some(),
+                    "{id} {key_id:?} must be a plain key, found {action:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v2_pro_layouts_keep_busy_keys_under_a_small_hand() {
+        // Menus and maps may go to the far keys; nothing a fight needs.
+        let menus = [
+            KeyToken::Escape,
+            KeyToken::Grave,
+            KeyToken::M,
+            KeyToken::C,
+            KeyToken::P,
+            KeyToken::F4,
+            // Minecraft's upper hotbar, which the scroll wheel reaches too.
+            KeyToken::Num6,
+            KeyToken::Num7,
+            KeyToken::Num8,
+            KeyToken::Num9,
+        ];
+        for id in SHIPPED_IDS.into_iter().filter(|id| *id != "default") {
+            let layout = v2_pro_layout(id);
+            for key_id in V2_PRO_HOME.iter().chain(&V2_PRO_NEAR) {
+                assert!(layout.contains_key(key_id), "{id} leaves {key_id:?} empty");
+            }
+            for key_id in V2_PRO_FAR {
+                if let Some(key) = token(layout.get(&key_id)) {
+                    assert!(
+                        menus.contains(&key),
+                        "{id} puts {key:?} on the far key {key_id:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v2_pro_moves_with_the_stick_where_the_game_moves_with_wasd() {
+        let stick = [
+            (KeyId::AnalogUp, KeyToken::W),
+            (KeyId::AnalogLeft, KeyToken::A),
+            (KeyId::AnalogDown, KeyToken::S),
+            (KeyId::AnalogRight, KeyToken::D),
+        ];
+        for id in SHIPPED_IDS {
+            let p = shipped_profile(id).unwrap();
+            let layout = v2_pro_layout(id);
+            let moves_with_wasd = token(p.bindings.get(&KeyId::ThumbN)) == Some(KeyToken::W);
+            for (key_id, key) in stick {
+                if moves_with_wasd {
+                    assert_eq!(token(layout.get(&key_id)), Some(key), "{id} {key_id:?}");
+                } else {
+                    assert_ne!(token(layout.get(&key_id)), Some(key), "{id} {key_id:?}");
+                }
+            }
+        }
+        // Click to move: the stick stays free for the game.
+        assert!(!v2_pro_layout("path-of-exile").keys().any(|k| k.is_stick()));
+        // Dota pans the camera with the arrows.
+        assert_eq!(
+            token(v2_pro_layout("dota-2").get(&KeyId::AnalogUp)),
+            Some(KeyToken::Up)
+        );
+    }
+
+    #[test]
+    fn deadlock_bindings_match_spec() {
+        let p = shipped_profile("deadlock").unwrap();
+        assert_eq!(p.game, GameId::Deadlock);
+        assert_eq!(p.setup_note, None, "works with the game's default keys");
+        let mut expected = vec![
+            (KeyId::Kp01, KeyToken::Escape),
+            (KeyId::Kp05, KeyToken::B),
+            (KeyId::Kp06, KeyToken::Tab),
+            (KeyId::Kp07, KeyToken::Z),
+            (KeyId::Kp08, KeyToken::X),
+            (KeyId::Kp09, KeyToken::C),
+            (KeyId::Kp10, KeyToken::V),
+            (KeyId::Kp11, KeyToken::LeftShift),
+            (KeyId::Kp12, KeyToken::Num1),
+            (KeyId::Kp13, KeyToken::Num2),
+            (KeyId::Kp14, KeyToken::Num3),
+            (KeyId::Kp15, KeyToken::Num4),
+            (KeyId::Kp16, KeyToken::LeftCtrl),
+            (KeyId::Kp17, KeyToken::Q),
+            (KeyId::Kp18, KeyToken::F),
+            (KeyId::Kp19, KeyToken::R),
+            (KeyId::Kp20, KeyToken::Space),
+        ];
+        expected.extend(WASD_THUMBS);
+        assert_key_bindings(&p, &expected);
+
+        let v2_pro = v2_pro_layout("deadlock");
+        for (key_id, key) in [
+            // Dash and the four abilities on the home row.
+            (KeyId::Kp11, KeyToken::LeftShift),
+            (KeyId::Kp12, KeyToken::Num1),
+            (KeyId::Kp13, KeyToken::Num2),
+            (KeyId::Kp14, KeyToken::Num3),
+            (KeyId::Kp15, KeyToken::Num4),
+            // Items above, melee, parry and reload below.
+            (KeyId::Kp07, KeyToken::Z),
+            (KeyId::Kp08, KeyToken::X),
+            (KeyId::Kp09, KeyToken::C),
+            (KeyId::Kp10, KeyToken::V),
+            (KeyId::Kp17, KeyToken::Q),
+            (KeyId::Kp18, KeyToken::F),
+            (KeyId::Kp19, KeyToken::R),
+            // Slide by pressing the stick while moving.
+            (KeyId::StickClick, KeyToken::LeftCtrl),
+            (KeyId::Kp20, KeyToken::Space),
+        ] {
+            assert_eq!(token(v2_pro.get(&key_id)), Some(key), "{key_id:?}");
+        }
+    }
+
     #[test]
     fn no_shipped_profile_automates_input() {
         // Most publishers allow rebinding but ban "one press, many actions":
@@ -589,13 +767,13 @@ mod tests {
     }
 
     #[test]
-    fn every_new_binding_is_a_plain_key_on_both_models() {
+    fn every_new_binding_is_a_plain_key_on_every_model() {
         for id in NEW_GAME_IDS {
             let p = shipped_profile(id).unwrap();
             assert_eq!(
                 p.device_models,
-                vec![DeviceModel::V2, DeviceModel::Pro],
-                "{id} must support both pads"
+                DeviceModel::ALL.to_vec(),
+                "{id} must support every pad"
             );
             assert!(p.lighting.color.is_some(), "{id} needs a sidebar colour");
             for (key_id, action) in &p.bindings {

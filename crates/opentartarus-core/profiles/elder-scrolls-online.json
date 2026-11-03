@@ -2,7 +2,7 @@
   "id": "elder-scrolls-online",
   "name": "The Elder Scrolls Online",
   "game": "elder-scrolls-online",
-  "device_models": ["v2", "pro"],
+  "device_models": ["v2", "pro", "v2pro"],
   "bindings": {
     "kp01": { "type": "key", "key": "1", "modifiers": [] },
     "kp02": { "type": "key", "key": "2", "modifiers": [] },
@@ -28,6 +28,35 @@
     "thumb_s": { "type": "key", "key": "s", "modifiers": [] },
     "thumb_e": { "type": "key", "key": "d", "modifiers": [] },
     "kp19": { "type": "key", "key": "leftctrl", "modifiers": [] }
+  },
+  "model_bindings": {
+    "v2pro": {
+      "kp21": { "type": "key", "key": "grave", "modifiers": [] },
+      "kp06": { "type": "key", "key": "leftshift", "modifiers": [] },
+      "kp07": { "type": "key", "key": "q", "modifiers": [] },
+      "kp08": { "type": "key", "key": "e", "modifiers": [] },
+      "kp09": { "type": "key", "key": "r", "modifiers": [] },
+      "kp10": { "type": "key", "key": "h", "modifiers": [] },
+      "kp11": { "type": "key", "key": "1", "modifiers": [] },
+      "kp12": { "type": "key", "key": "2", "modifiers": [] },
+      "kp13": { "type": "key", "key": "3", "modifiers": [] },
+      "kp14": { "type": "key", "key": "4", "modifiers": [] },
+      "kp15": { "type": "key", "key": "5", "modifiers": [] },
+      "kp16": { "type": "key", "key": "leftctrl", "modifiers": [] },
+      "kp17": { "type": "key", "key": "x", "modifiers": [] },
+      "kp18": { "type": "key", "key": "c", "modifiers": [] },
+      "kp19": { "type": "key", "key": "i", "modifiers": [] },
+      "kp24": { "type": "key", "key": "m", "modifiers": [] },
+      "kp25": { "type": "key", "key": "escape", "modifiers": [] },
+      "kp26": { "type": "key", "key": "k", "modifiers": [] },
+      "kp27": { "type": "key", "key": "enter", "modifiers": [] },
+      "kp20": { "type": "key", "key": "space", "modifiers": [] },
+      "analog_up": { "type": "key", "key": "w", "modifiers": [] },
+      "analog_left": { "type": "key", "key": "a", "modifiers": [] },
+      "analog_down": { "type": "key", "key": "s", "modifiers": [] },
+      "analog_right": { "type": "key", "key": "d", "modifiers": [] },
+      "stick_click": { "type": "key", "key": "leftshift", "modifiers": [] }
+    }
   },
   "lighting": {"effect": "static", "brightness": 80, "color": [45, 130, 90]}
 }

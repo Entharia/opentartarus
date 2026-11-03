@@ -1,10 +1,8 @@
-use crate::constants::{
-    ANALOG_PRESS_RATIO, ANALOG_RELEASE_RATIO, TAP_HOLD_MS, USB_PID_TARTARUS_PRO,
-    USB_PID_TARTARUS_V2, USB_VID_RAZER,
-};
+use crate::constants::{ANALOG_PRESS_RATIO, ANALOG_RELEASE_RATIO, TAP_HOLD_MS, USB_VID_RAZER};
 use crate::keymap::{
-    analog_axis_ratio, decode_hat, modifier_to_evdev, mouse_button_to_evdev, token_to_evdev,
-    KeyMap, ABS_HAT0X, ABS_HAT0Y, ABS_X, ABS_Y, EV_ABS, EV_KEY, EV_REL, REL_WHEEL,
+    analog_axis_center, analog_axis_ratio_for, decode_hat, modifier_to_evdev,
+    mouse_button_to_evdev, token_to_evdev, KeyMap, ABS_HAT0X, ABS_HAT0Y, ABS_X, ABS_Y, EV_ABS,
+    EV_KEY, EV_REL, REL_WHEEL,
 };
 use crate::types::{
     Action, DeviceModel, Edge, KeyId, MacroKind, MacroStep, MouseTarget, Profile, ProfileSwitch,
@@ -15,7 +13,6 @@ use std::collections::BTreeMap;
 const KEY_DOWN: i32 = 1;
 const KEY_REPEAT: i32 = 2;
 const KEY_UP: i32 = 0;
-const ANALOG_AXIS_CENTER: i32 = 128;
 
 #[derive(Debug, Clone)]
 enum MacroOp {
@@ -31,7 +28,7 @@ struct MacroPlay {
 }
 
 pub fn allow_grab(vid: u16, pid: u16) -> bool {
-    vid == USB_VID_RAZER && (pid == USB_PID_TARTARUS_V2 || pid == USB_PID_TARTARUS_PRO)
+    vid == USB_VID_RAZER && DeviceModel::from_usb_pid(pid).is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,13 +78,9 @@ pub struct RemapEngine {
 
 impl RemapEngine {
     pub fn new(model: DeviceModel) -> Self {
-        let map = match model {
-            DeviceModel::V2 => KeyMap::v2(),
-            DeviceModel::Pro => KeyMap::pro(),
-        };
         Self {
             model,
-            map,
+            map: KeyMap::for_model(model),
             table: BTreeMap::new(),
             macro_busy: false,
             macro_play: None,
@@ -96,8 +89,8 @@ impl RemapEngine {
             hat_x: 0,
             hat_y: 0,
             hat_dir: None,
-            analog_x: ANALOG_AXIS_CENTER,
-            analog_y: ANALOG_AXIS_CENTER,
+            analog_x: analog_axis_center(model),
+            analog_y: analog_axis_center(model),
             analog_left: false,
             analog_right: false,
             analog_up: false,
@@ -107,6 +100,12 @@ impl RemapEngine {
 
     pub fn apply_profile(&mut self, p: &Profile) {
         self.table = p.bindings_for_model(self.model);
+    }
+
+    /// Whether the active profile binds any part of the thumbstick. While it
+    /// does not, the daemon leaves the V2 Pro's gamepad node to games.
+    pub fn binds_stick(&self) -> bool {
+        self.table.keys().any(|key| key.is_stick())
     }
 
     pub fn has_timed_work(&self) -> bool {
@@ -240,12 +239,12 @@ impl RemapEngine {
     fn handle_analog(&mut self, ev: RawEvent, sink: &mut impl EventSink, clock: &mut impl Clock) {
         if ev.code == ABS_X {
             self.analog_x = ev.value;
-            let ratio = analog_axis_ratio(self.analog_x);
+            let ratio = analog_axis_ratio_for(self.model, self.analog_x);
             self.apply_analog_dir(KeyId::AnalogRight, ratio, ev, sink, clock);
             self.apply_analog_dir(KeyId::AnalogLeft, -ratio, ev, sink, clock);
         } else {
             self.analog_y = ev.value;
-            let ratio = analog_axis_ratio(self.analog_y);
+            let ratio = analog_axis_ratio_for(self.model, self.analog_y);
             self.apply_analog_dir(KeyId::AnalogDown, ratio, ev, sink, clock);
             self.apply_analog_dir(KeyId::AnalogUp, -ratio, ev, sink, clock);
         }
@@ -278,6 +277,9 @@ impl RemapEngine {
         clock: &mut impl Clock,
     ) {
         match self.table.get(&key_id).cloned() {
+            // The virtual devices have no axes and no gamepad buttons, so an
+            // unbound stick, hat or gamepad button has nothing to pass on.
+            None if ev.ev_type == EV_ABS || key_id.is_stick() => {}
             None => {
                 sink.emit(Emitted {
                     keyboard: ev.ev_type == EV_KEY,
@@ -506,6 +508,7 @@ mod tests {
             game: crate::types::GameId::Default,
             device_models: vec![DeviceModel::V2],
             bindings: BTreeMap::new(),
+            model_bindings: BTreeMap::new(),
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: 80,
@@ -722,6 +725,7 @@ mod tests {
             game: crate::types::GameId::Default,
             device_models: vec![model],
             bindings: BTreeMap::new(),
+            model_bindings: BTreeMap::new(),
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: 80,
@@ -937,6 +941,7 @@ mod tests {
             game: crate::types::GameId::Default,
             device_models: vec![DeviceModel::V2],
             bindings: BTreeMap::new(),
+            model_bindings: BTreeMap::new(),
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: 80,
@@ -1022,5 +1027,108 @@ mod tests {
         e.handle(press_kp01(), &mut s, &mut c);
         assert_eq!(e.take_profile_switch(), Some(ProfileSwitch::Next));
         assert!(s.0.is_empty());
+    }
+
+    fn v2_pro_event(ev_type: u16, code: u16, value: i32) -> RawEvent {
+        RawEvent {
+            vid: USB_VID_RAZER,
+            pid: crate::constants::USB_PID_TARTARUS_V2_PRO,
+            ev_type,
+            code,
+            value,
+        }
+    }
+
+    #[test]
+    fn v2_pro_is_grabbed_and_its_extra_keys_remap() {
+        assert!(allow_grab(
+            USB_VID_RAZER,
+            crate::constants::USB_PID_TARTARUS_V2_PRO
+        ));
+        let mut e = profile_with(
+            DeviceModel::V2Pro,
+            KeyId::Kp21,
+            Action::Key {
+                key: KeyToken::F1,
+                modifiers: vec![],
+            },
+        );
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let grave = 41;
+        e.handle(v2_pro_event(1, grave, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, grave, 0), &mut s, &mut c);
+        let f1 = crate::keymap::token_to_evdev(KeyToken::F1);
+        assert_eq!(
+            s.0.iter().map(|x| (x.code, x.value)).collect::<Vec<_>>(),
+            vec![(f1, 1), (f1, 0)]
+        );
+    }
+
+    #[test]
+    fn v2_pro_gamepad_stick_presses_past_the_threshold() {
+        let mut e = profile_with(
+            DeviceModel::V2Pro,
+            KeyId::AnalogUp,
+            Action::Key {
+                key: KeyToken::W,
+                modifiers: vec![],
+            },
+        );
+        assert!(e.binds_stick());
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let w = crate::keymap::token_to_evdev(KeyToken::W);
+        // Resting and small wobble around 0 do nothing.
+        e.handle(v2_pro_event(3, ABS_Y, -771), &mut s, &mut c);
+        e.handle(v2_pro_event(3, ABS_X, 2162), &mut s, &mut c);
+        assert!(s.0.is_empty(), "{:?}", s.0);
+        e.handle(v2_pro_event(3, ABS_Y, -30000), &mut s, &mut c);
+        assert_eq!(s.0.last().map(|x| (x.code, x.value)), Some((w, 1)));
+        e.handle(v2_pro_event(3, ABS_Y, -1000), &mut s, &mut c);
+        assert_eq!(s.0.last().map(|x| (x.code, x.value)), Some((w, 0)));
+    }
+
+    #[test]
+    fn an_unbound_stick_and_click_pass_nothing_to_the_virtual_devices() {
+        let mut e = profile_with(
+            DeviceModel::V2Pro,
+            KeyId::Kp01,
+            Action::Key {
+                key: KeyToken::Q,
+                modifiers: vec![],
+            },
+        );
+        assert!(!e.binds_stick());
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        e.handle(v2_pro_event(3, ABS_X, 32767), &mut s, &mut c);
+        e.handle(v2_pro_event(3, ABS_X, 0), &mut s, &mut c);
+        e.handle(
+            v2_pro_event(1, crate::keymap::BTN_THUMBL, 1),
+            &mut s,
+            &mut c,
+        );
+        e.handle(
+            v2_pro_event(1, crate::keymap::BTN_THUMBL, 0),
+            &mut s,
+            &mut c,
+        );
+        assert!(s.0.is_empty(), "{:?}", s.0);
+    }
+
+    #[test]
+    fn a_v2_profile_drives_the_same_keys_on_the_v2_pro() {
+        // The shipped Default binds kp06 to Tab; on the V2 Pro, kp06 is the
+        // key that sends Tab, so the profile lands where it belongs.
+        let p: Profile =
+            serde_json::from_str(crate::pack::shipped_json("default").unwrap()).unwrap();
+        let mut e = RemapEngine::new(DeviceModel::V2Pro);
+        e.apply_profile(&p);
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let tab = crate::keymap::token_to_evdev(KeyToken::Tab);
+        e.handle(v2_pro_event(1, tab, 1), &mut s, &mut c);
+        assert_eq!(s.0.last().map(|x| (x.code, x.value)), Some((tab, 1)));
     }
 }

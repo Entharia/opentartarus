@@ -2,7 +2,7 @@
   "id": "path-of-exile",
   "name": "Path of Exile",
   "game": "path-of-exile",
-  "device_models": ["v2", "pro"],
+  "device_models": ["v2", "pro", "v2pro"],
   "bindings": {
     "kp01": { "type": "key", "key": "1", "modifiers": [] },
     "kp02": { "type": "key", "key": "2", "modifiers": [] },
@@ -24,6 +24,30 @@
     "kp18": { "type": "key", "key": "c", "modifiers": [] },
     "kp19": { "type": "key", "key": "p", "modifiers": [] },
     "kp20": { "type": "key", "key": "space", "modifiers": [] }
+  },
+  "model_bindings": {
+    "v2pro": {
+      "kp21": { "type": "key", "key": "p", "modifiers": [] },
+      "kp06": { "type": "key", "key": "1", "modifiers": [] },
+      "kp07": { "type": "key", "key": "2", "modifiers": [] },
+      "kp08": { "type": "key", "key": "3", "modifiers": [] },
+      "kp09": { "type": "key", "key": "4", "modifiers": [] },
+      "kp10": { "type": "key", "key": "5", "modifiers": [] },
+      "kp11": { "type": "key", "key": "q", "modifiers": [] },
+      "kp12": { "type": "key", "key": "w", "modifiers": [] },
+      "kp13": { "type": "key", "key": "e", "modifiers": [] },
+      "kp14": { "type": "key", "key": "r", "modifiers": [] },
+      "kp15": { "type": "key", "key": "t", "modifiers": [] },
+      "kp16": { "type": "key", "key": "x", "modifiers": [] },
+      "kp17": { "type": "key", "key": "d", "modifiers": [] },
+      "kp18": { "type": "key", "key": "z", "modifiers": [] },
+      "kp19": { "type": "key", "key": "g", "modifiers": [] },
+      "kp24": { "type": "key", "key": "tab", "modifiers": [] },
+      "kp25": { "type": "key", "key": "enter", "modifiers": [] },
+      "kp26": { "type": "key", "key": "i", "modifiers": [] },
+      "kp27": { "type": "key", "key": "c", "modifiers": [] },
+      "kp20": { "type": "key", "key": "space", "modifiers": [] }
+    }
   },
   "lighting": {"effect": "static", "brightness": 80, "color": [140, 0, 0]}
 }

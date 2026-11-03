@@ -48,6 +48,7 @@ pub const EMPTY_STATE_BODY: &str = "Click a key on the pad to change what it sen
 pub const KEYPAD_HINT: &str = "Click any key to change what it sends.";
 pub const DEVICE_CONNECTED_V2: &str = "Tartarus V2 connected";
 pub const DEVICE_CONNECTED_PRO: &str = "Tartarus Pro connected";
+pub const DEVICE_CONNECTED_V2_PRO: &str = "Tartarus V2 Pro connected";
 pub const DEVICE_NOT_CONNECTED: &str = "No device";
 pub const STATUS_APPLIED_SUFFIX: &str = " applied";
 pub const STATUS_READY: &str = "Ready";
@@ -60,6 +61,8 @@ pub const WHEEL_UP_GLYPH: &str = "\u{25b2}";
 pub const WHEEL_CLICK_GLYPH: &str = "\u{25cf}";
 pub const WHEEL_DOWN_GLYPH: &str = "\u{25bc}";
 pub const MODE_LABEL: &str = "Mode";
+/// The thumbstick's click, drawn in the middle of the stick cells.
+pub const STICK_CLICK_GLYPH: &str = "\u{25CF}";
 pub const LABEL_SWITCH_PROFILE: &str = "Switch profile";
 pub const CHIP_NEXT_PROFILE: &str = "Next profile";
 pub const PROFILE_PICK_PLACEHOLDER: &str = "Jump to\u{2026}";
