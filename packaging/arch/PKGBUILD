@@ -30,7 +30,7 @@ package() {
   install -Dm755 target/release/opentartarus-daemon "$pkgdir/usr/bin/opentartarus-daemon"
   install -Dm755 target/release/opentartarus-ui "$pkgdir/usr/bin/opentartarus-ui"
   install -Dm755 target/release/opentartarus-fix-permissions "$pkgdir/usr/libexec/opentartarus-fix-permissions"
-  install -Dm644 packaging/udev/99-opentartarus.rules "$pkgdir/usr/lib/udev/rules.d/99-opentartarus.rules"
+  install -Dm644 packaging/udev/70-opentartarus.rules "$pkgdir/usr/lib/udev/rules.d/70-opentartarus.rules"
   install -Dm644 packaging/polkit/com.opentartarus.fix-permissions.policy "$pkgdir/usr/share/polkit-1/actions/com.opentartarus.fix-permissions.policy"
   install -Dm644 packaging/desktop/opentartarus.desktop "$pkgdir/usr/share/applications/opentartarus.desktop"
   install -Dm644 packaging/autostart/opentartarus-daemon.desktop "$pkgdir/etc/xdg/autostart/opentartarus-daemon.desktop"

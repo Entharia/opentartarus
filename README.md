@@ -17,7 +17,7 @@ Source: https://github.com/PikkonMG/opentartarus
 - Linux, on X11 or Wayland
 - A Tartarus V2, Tartarus Pro or Tartarus V2 Pro
 - Rust, to build from this tree
-- OpenRazer, if you want lighting. Keys work without it.
+- OpenRazer, if you want lighting. Keys work without it. Released OpenRazer does not know the Tartarus V2 Pro yet, so on that pad the lighting needs an OpenRazer build with V2 Pro support.
 
 Polychromatic and RazerGenie are frontends for `openrazer-daemon`, not a second driver. You can keep them open. OpenTartarus uses the same daemon on the session bus name `org.razer`, and the same `razerkbd` sysfs nodes. Remaps stay in OpenTartarus.
 
@@ -137,7 +137,7 @@ OPENTARTARUS_HW_TEST=1
 
 ## First-run permissions
 
-The keypad and `/dev/uinput` need the group `opentartarus`. The udev rule in `packaging/udev/99-opentartarus.rules` assigns that group to Tartarus V2, Pro and V2 Pro nodes and to uinput.
+The keypad and `/dev/uinput` need the group `opentartarus`. The udev rule in `packaging/udev/70-opentartarus.rules` assigns that group to Tartarus V2, Pro and V2 Pro nodes and to uinput. It also tags them for the logged-in user, so the pad works right after installing, before a new group takes effect at your next login.
 
 `opentartarus-fix-permissions` is a polkit helper. Its policy is in `packaging/polkit/com.opentartarus.fix-permissions.policy`. It creates the group, adds your user, and writes the udev rule if it is missing. The "Fix permissions" entry in the window's menu runs that helper through `pkexec` at `/usr/libexec/opentartarus-fix-permissions`.
 

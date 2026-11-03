@@ -4,8 +4,11 @@ use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 
 const GROUP_NAME: &str = "opentartarus";
-const RULES_PATH: &str = "/etc/udev/rules.d/99-opentartarus.rules";
-const UDEV_RULES: &str = include_str!("../../../packaging/udev/99-opentartarus.rules");
+// The rule must sort before systemd's 73-seat-late.rules, which applies the
+// `uaccess` tag. Older builds wrote it as 99-, where the tag did nothing.
+const RULES_PATH: &str = "/etc/udev/rules.d/70-opentartarus.rules";
+const LEGACY_RULES_PATH: &str = "/etc/udev/rules.d/99-opentartarus.rules";
+const UDEV_RULES: &str = include_str!("../../../packaging/udev/70-opentartarus.rules");
 const PKEXEC_UID_VAR: &str = "PKEXEC_UID";
 
 fn main() -> ExitCode {
@@ -55,6 +58,11 @@ fn resolve_user_from_pkexec_uid() -> Result<String, HelperError> {
 }
 
 fn write_udev_rules_if_missing() -> Result<(), HelperError> {
+    // Only this helper ever wrote the old file, so it is safe to remove.
+    let legacy = Path::new(LEGACY_RULES_PATH);
+    if legacy.exists() {
+        fs::remove_file(legacy).map_err(|_| HelperError::WriteRules)?;
+    }
     let path = Path::new(RULES_PATH);
     if path.exists() {
         return Ok(());

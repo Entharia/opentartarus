@@ -7,7 +7,7 @@ fn packaging_path(relative: &str) -> std::path::PathBuf {
 #[test]
 fn udev_rule_allow_list_only() {
     let text =
-        std::fs::read_to_string(packaging_path("udev/99-opentartarus.rules")).expect("udev rule");
+        std::fs::read_to_string(packaging_path("udev/70-opentartarus.rules")).expect("udev rule");
     assert!(text.contains("idProduct}==\"022b\""));
     assert!(text.contains("idProduct}==\"0244\""));
     assert!(text.contains("idProduct}==\"02eb\""));
@@ -15,6 +15,21 @@ fn udev_rule_allow_list_only() {
     assert!(text.contains("KERNEL==\"uinput\""));
     assert!(!text.contains("008f"));
     assert!(!text.contains("0090"));
+}
+
+#[test]
+fn the_udev_rule_runs_before_systemd_applies_uaccess() {
+    // systemd's 73-seat-late.rules turns the `uaccess` tag into an ACL for
+    // the logged-in user. A rule that sorts after it adds the tag too late.
+    let dir = packaging_path("udev");
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("udev dir")
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, vec!["70-opentartarus.rules".to_string()]);
+    assert!(names[0].as_str() < "73-seat-late.rules");
+    let text = std::fs::read_to_string(dir.join(&names[0])).unwrap();
+    assert!(text.contains("TAG+=\"uaccess\""));
 }
 
 #[test]
