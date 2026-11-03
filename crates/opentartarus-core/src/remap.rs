@@ -1090,6 +1090,63 @@ mod tests {
     }
 
     #[test]
+    fn v2_pro_stick_as_wasd_never_leaves_a_key_held_after_it_returns() {
+        let p: Profile =
+            serde_json::from_str(crate::pack::shipped_json("deadlock").unwrap()).unwrap();
+        let mut e = RemapEngine::new(DeviceModel::V2Pro);
+        e.apply_profile(&p);
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let mut stick = |x: i32, y: i32, s: &mut FakeSink| {
+            e.handle(v2_pro_event(3, ABS_X, x), s, &mut c);
+            e.handle(v2_pro_event(3, ABS_Y, y), s, &mut c);
+        };
+        // Up, a diagonal, a flick straight across the centre, a slow circle,
+        // then back to a resting wobble of a few hundred.
+        let path = [
+            (0, -32768),
+            (23000, -23000),
+            (32767, 0),
+            (-32768, 0),
+            (0, 32767),
+            (-23000, 23000),
+            (-32768, 0),
+            (-23000, -23000),
+            (0, -32768),
+            (12000, -9000),
+            (300, -250),
+            (-120, 80),
+        ];
+        for (x, y) in path {
+            stick(x, y, &mut s);
+        }
+        let mut held = std::collections::BTreeSet::new();
+        for ev in &s.0 {
+            match ev.value {
+                1 => {
+                    assert!(held.insert(ev.code), "{} pressed twice", ev.code);
+                }
+                0 => {
+                    assert!(held.remove(&ev.code), "{} released unpressed", ev.code);
+                }
+                _ => {}
+            }
+        }
+        assert!(held.is_empty(), "still held: {held:?}");
+        let pressed: std::collections::BTreeSet<u16> =
+            s.0.iter()
+                .filter(|ev| ev.value == 1)
+                .map(|ev| ev.code)
+                .collect();
+        let wasd: std::collections::BTreeSet<u16> =
+            [KeyToken::W, KeyToken::A, KeyToken::S, KeyToken::D]
+                .into_iter()
+                .map(crate::keymap::token_to_evdev)
+                .collect();
+        assert_eq!(pressed, wasd, "the path pushes all four ways");
+    }
+
+    #[test]
     fn an_unbound_stick_and_click_pass_nothing_to_the_virtual_devices() {
         let mut e = profile_with(
             DeviceModel::V2Pro,

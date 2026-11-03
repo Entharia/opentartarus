@@ -457,7 +457,7 @@ fn device_loop(
         }
         if pending.is_empty() {
             tick_remap(&state, &sink, &epoch);
-            std::thread::sleep(idle_sleep(&state));
+            wait_for_input(&grabbed, idle_sleep(&state));
             continue;
         }
         for (ev_type, code, value) in pending {
@@ -489,6 +489,33 @@ fn tick_remap(
 ) {
     let mut clock = SystemClock;
     tick_engine(state, sink, epoch, &mut clock);
+}
+
+/// Blocks until one of the pad's nodes has events to read, or `timeout`
+/// passes. The timeout is only the longest wait, for the checks the loop does
+/// between reads (unplug, a profile that now binds the stick, macro timers).
+/// Waking on input instead of on a timer matters most for the thumbstick: it
+/// sends hundreds of events a second, and a reader that sleeps through them
+/// both lags and overflows the kernel's buffer, losing the stick's return to
+/// the centre.
+fn wait_for_input(devices: &[evdev::Device], timeout: Duration) {
+    use std::os::fd::AsRawFd;
+    let mut fds: Vec<libc::pollfd> = devices
+        .iter()
+        .map(|device| libc::pollfd {
+            fd: device.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: `fds` is a valid, initialised array of `fds.len()` pollfd
+    // structs that outlives the call, and every fd in it stays open because
+    // `devices` is borrowed for the whole call. A failed or interrupted poll
+    // only means the loop reads again sooner.
+    unsafe {
+        libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms);
+    }
 }
 
 fn idle_sleep(state: &Mutex<DaemonState<DaemonLighting>>) -> Duration {
