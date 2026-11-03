@@ -72,9 +72,24 @@ Packages are on the Releases page: https://github.com/PikkonMG/opentartarus/rele
 
 - Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./opentartarus_*_amd64.deb`
 - Fedora, openSUSE, RHEL: `sudo dnf install ./opentartarus-*.x86_64.rpm`
+- Arch, CachyOS, Manjaro, EndeavourOS: build the package from `packaging/arch`, as described below.
 - Other distros: build from source, as described below.
 
 Both packages install the udev rule, the polkit policy and the permissions helper. After installing one, open the app and press "Fix permissions" once, then unplug and replug the keypad. There is no AppImage: it could not install those system files, so the keypad would stay locked until the user did it by hand.
+
+### Arch Linux and derivatives
+
+There is no prebuilt Arch package. `packaging/arch/PKGBUILD` builds one from your checkout, so pacman tracks every file and `sudo pacman -R opentartarus` removes them all again.
+
+1. Install the build tools: `sudo pacman -S --needed base-devel git rust`
+2. Get the code: `git clone https://github.com/PikkonMG/opentartarus.git && cd opentartarus`
+3. Build and install the package: `cd packaging/arch && makepkg -si`
+4. Open OpenTartarus from the app menu and press "Fix permissions" once. It adds you to the keypad group.
+5. Log out and back in so the new group applies, then unplug the keypad and plug it back in.
+
+The daemon then starts at login. The window is in the app menu as OpenTartarus. Until step 5, the window says it cannot talk to the keypad: the udev rule has already handed the pad to the new group, and a running session does not pick up a new group.
+
+To update, pull the latest code and run `makepkg -si` in `packaging/arch` again. Then quit the daemon from the tray and open the app, so the new daemon starts.
 
 A release is built by the GitHub workflow in `.github/workflows/release.yml`. It is started by hand from the Actions tab with the tag to publish, and it refuses a tag that does not match the version in `Cargo.toml`. It builds the deb with `cargo-deb` and the rpm with `cargo-generate-rpm`, then creates the release with both attached.
 

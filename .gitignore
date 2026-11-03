@@ -11,6 +11,9 @@ build/
 *.deb
 *.rpm
 *.AppImage
+*.pkg.tar.zst
+/packaging/arch/pkg/
+/packaging/arch/src/
 
 # OS
 .DS_Store

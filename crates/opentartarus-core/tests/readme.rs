@@ -1,10 +1,13 @@
 /// The only privileged commands the README may print. Installing a package
-/// needs root, so those two lines are allowed. Anything else means the README
+/// needs root, so those lines are allowed: the deb, the rpm, and on Arch the
+/// build tools for the PKGBUILD and removing the package again. Anything else means the README
 /// is telling a reader to fix permissions by hand, which is the job of the
 /// "Fix permissions" helper in the window.
-const ALLOWED_ROOT_COMMANDS: [&str; 2] = [
+const ALLOWED_ROOT_COMMANDS: [&str; 4] = [
     "sudo apt install ./opentartarus_*_amd64.deb",
     "sudo dnf install ./opentartarus-*.x86_64.rpm",
+    "sudo pacman -S --needed base-devel git rust",
+    "sudo pacman -R opentartarus",
 ];
 
 const ROOT_COMMAND_PREFIX: &str = "sudo ";

@@ -44,3 +44,41 @@ fn the_desktop_entry_points_at_the_shipped_icon_name() {
     assert!(text.contains("Icon=opentartarus"));
     assert!(text.contains("Exec=opentartarus-ui"));
 }
+
+#[test]
+fn the_arch_package_installs_what_the_deb_does_at_the_crate_version() {
+    let pkgbuild = std::fs::read_to_string(packaging_path("arch/PKGBUILD")).expect("PKGBUILD");
+    let daemon_toml = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../opentartarus-daemon/Cargo.toml"),
+    )
+    .expect("daemon Cargo.toml");
+    // Every file the deb ships, by its installed path.
+    let deb = daemon_toml
+        .split("[package.metadata.deb]")
+        .nth(1)
+        .and_then(|rest| rest.split("[package.metadata.generate-rpm]").next())
+        .expect("deb metadata");
+    let mut checked = 0;
+    for line in deb.lines().filter(|l| l.trim_start().starts_with("[\"")) {
+        let fields: Vec<&str> = line.split('"').collect();
+        let source = fields[1];
+        let dest_dir = fields[3];
+        let name = source.rsplit('/').next().unwrap();
+        let installed = format!("$pkgdir/{dest_dir}{name}");
+        assert!(
+            pkgbuild.contains(&installed),
+            "the PKGBUILD must install {installed}"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 10, "found only {checked} deb assets");
+
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        pkgbuild.contains(&format!("pkgver={version}\n")),
+        "pkgver must be {version}"
+    );
+    let install =
+        std::fs::read_to_string(packaging_path("arch/opentartarus.install")).expect("install");
+    assert!(install.contains("groupadd --system opentartarus"));
+}

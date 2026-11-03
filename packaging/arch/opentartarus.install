@@ -1,0 +1,13 @@
+# The udev rule hands the keypad and uinput to the group "opentartarus", so
+# the group must exist before the rule can do anything.
+post_install() {
+  getent group opentartarus >/dev/null || groupadd --system opentartarus
+  udevadm control --reload-rules || true
+  udevadm trigger --subsystem-match=input --subsystem-match=hidraw --subsystem-match=misc || true
+  echo "OpenTartarus: add yourself to the opentartarus group, or press \"Fix permissions\""
+  echo "in the app once. Then log out and back in, and replug the keypad."
+}
+
+post_upgrade() {
+  post_install
+}
