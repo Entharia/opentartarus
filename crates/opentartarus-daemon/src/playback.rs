@@ -158,7 +158,7 @@ mod tests {
     use opentartarus_core::paths::Paths;
     use opentartarus_core::record::Recorder;
     use opentartarus_core::remap::RemapEngine;
-    use opentartarus_core::types::DeviceModel;
+    use opentartarus_core::types::{DeviceModel, Layer};
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -190,6 +190,7 @@ mod tests {
             uinput_ok: true,
             grab_conflict: None,
             stick_rotation_deg: 0,
+            record_layer: Layer::Base,
         }
     }
 

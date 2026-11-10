@@ -60,6 +60,8 @@ Select a stick key in the window to set how the stick works. Each profile picks 
 
 The rotation slider turns the stick in 15° steps, from −180° to 180°. It holds for every profile, so it suits a pad that sits turned on the desk or a hand that pushes the stick at an angle. If pushing the stick away from you moves right, try −90°.
 
+The Hypershift button works as it does in Synapse: hold it and every key switches to a second binding. Pick **Hypershift** above the keypad to set those bindings for the active profile. A key you leave empty there keeps its normal binding, which the window shows faintly. Bind the Hypershift key itself on the normal layer to use it as an ordinary key instead; the layer is off while it is bound. The pad reports this button only on its Razer HID interface, so OpenTartarus reads it from there, with or without OpenRazer. While the button is held, the pad shows its own lighting and ignores lighting changes until it is let go, so the lights cannot be set for Hypershift.
+
 The three thumb buttons and the onboard profile and lighting keys sent nothing to Linux when they were tested, so they are not drawn.
 
 ## Game rules

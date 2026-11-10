@@ -1,20 +1,21 @@
 use opentartarus_core::constants::USB_VID_RAZER;
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::{EventMethod, Method};
-use opentartarus_core::keymap::{mouse_button_to_evdev, EV_KEY, EV_REL, REL_WHEEL};
+use opentartarus_core::keymap::{mouse_button_to_evdev, EV_KEY, EV_REL, KEY_FN, REL_WHEEL};
 use opentartarus_core::lighting::LightingClient;
 use opentartarus_core::pack::SHIPPED_IDS;
 use opentartarus_core::paths::Paths;
 use opentartarus_core::record::RecordReason;
 use opentartarus_core::remap::{Clock, RawEvent, RemapEngine};
 use opentartarus_core::store::{read_active_id, read_stick_rotation};
-use opentartarus_core::types::{DeviceModel, MouseButton, ScrollDir};
+use opentartarus_core::types::{DeviceModel, KeyId, Layer, MouseButton, ScrollDir};
 use opentartarus_daemon::device::{
     busy_decision, classify_device_io, detect_status, device_ui_state, enumerate_tartarus,
     grab_conflict_status_value, grab_targets, lookup_event_holders, pick_first, scan_interval_ms,
     snapshot_changed, BusyDecision, DetectStatus, Detected, DeviceIoKind, DeviceUiState,
 };
 use opentartarus_daemon::handler::{handle_request, DaemonState};
+use opentartarus_daemon::hypershift::HypershiftReader;
 use opentartarus_daemon::perms::{probe_evdev_readable, probe_uinput};
 use opentartarus_daemon::playback::{
     commit_if_engine_replaced, remap_physical_event, tick_engine, EngineEpoch,
@@ -32,7 +33,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
 const DEFAULT_PROFILE_NAME: &str = "Default";
@@ -41,6 +42,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(POLL_INTERVAL_MS);
 const TICK_INTERVAL_MS: u64 = 10;
 const TICK_INTERVAL: Duration = Duration::from_millis(TICK_INTERVAL_MS);
 const KEY_DOWN: i32 = 1;
+/// How often to try the Hypershift node again after it would not open, and
+/// when to stop trying and log it.
+const HYPERSHIFT_RETRY: Duration = Duration::from_secs(1);
+const HYPERSHIFT_RETRY_GIVE_UP: Duration = Duration::from_secs(30);
 const EV_SYN: u16 = 0;
 const ALREADY_RUNNING_EXIT: i32 = 1;
 const SUCCESS_EXIT: i32 = 0;
@@ -157,6 +162,7 @@ async fn run() -> Result<(), ErrorCode> {
         uinput_ok,
         grab_conflict,
         stick_rotation_deg: read_stick_rotation(&paths),
+        record_layer: Layer::Base,
     };
     state.engine.set_stick_rotation(state.stick_rotation_deg);
 
@@ -328,12 +334,19 @@ fn device_loop(
     // Indexes into `grabbed` of gamepad nodes, and whether they are held.
     let mut gamepad_idx: Vec<usize> = Vec::new();
     let mut gamepad_held = false;
+    let mut hypershift: Option<HypershiftReader> = None;
+    // Set while the grabbed pad has Hypershift but its node is not open yet:
+    // right after a replug, udev may not have given access to it.
+    // Holds when the node first failed to open and when to try next.
+    let mut hypershift_retry: Option<(Instant, Instant)> = None;
     let mut last_ui: Option<DeviceUiState> = None;
 
     while !quit.load(Ordering::SeqCst) {
         poll_record_timeout(&state, &events);
 
         if grabbed.is_empty() {
+            hypershift = None;
+            hypershift_retry = None;
             let detected = pick_first(enumerate_tartarus());
             let status = detect_status(detected.as_ref(), probe_evdev_readable);
             match (status, detected) {
@@ -350,6 +363,13 @@ fn device_loop(
                                 .map(|(index, _)| index)
                                 .collect();
                             gamepad_held = true;
+                            if detected.model.has_key(KeyId::Hypershift) {
+                                hypershift = HypershiftReader::open(detected.vid, detected.pid);
+                                if hypershift.is_none() {
+                                    let now = Instant::now();
+                                    hypershift_retry = Some((now, now + HYPERSHIFT_RETRY));
+                                }
+                            }
                             last_ui = Some(device_ui_state(
                                 DetectStatus::Present,
                                 Some(detected.model),
@@ -433,8 +453,42 @@ fn device_loop(
             }
         }
 
+        if let Some((since, _)) = hypershift_retry.filter(|(_, next)| Instant::now() >= *next) {
+            hypershift = HypershiftReader::open(vid, pid);
+            hypershift_retry = if hypershift.is_some() {
+                None
+            } else if since.elapsed() > HYPERSHIFT_RETRY_GIVE_UP {
+                log::write("hypershift: the pad's HID node is not readable");
+                None
+            } else {
+                Some((since, Instant::now() + HYPERSHIFT_RETRY))
+            };
+        }
+
         let mut pending = Vec::new();
         let mut disconnect = false;
+        // Hypershift first: it is usually pressed just before the key it
+        // shifts, and both can land in the same wake-up.
+        if let Some(reader) = hypershift.as_mut() {
+            match reader.read_changes() {
+                Ok(changes) => {
+                    pending.extend(
+                        changes
+                            .into_iter()
+                            .map(|held| (EV_KEY, KEY_FN, i32::from(held))),
+                    );
+                }
+                Err(_) => {
+                    // Let the engine see the release it will never get.
+                    if reader.held() {
+                        pending.push((EV_KEY, KEY_FN, 0));
+                    }
+                    hypershift = None;
+                    let now = Instant::now();
+                    hypershift_retry = Some((now, now + HYPERSHIFT_RETRY));
+                }
+            }
+        }
         for device in &mut grabbed {
             match device.fetch_events() {
                 Ok(iter) => {
@@ -459,7 +513,8 @@ fn device_loop(
         }
         if pending.is_empty() {
             tick_remap(&state, &sink, &epoch);
-            wait_for_input(&grabbed, idle_sleep(&state));
+            let extra = hypershift.as_ref().map(HypershiftReader::as_raw_fd);
+            wait_for_input(&grabbed, extra, idle_sleep(&state));
             continue;
         }
         for (ev_type, code, value) in pending {
@@ -500,12 +555,14 @@ fn tick_remap(
 /// sends hundreds of events a second, and a reader that sleeps through them
 /// both lags and overflows the kernel's buffer, losing the stick's return to
 /// the centre.
-fn wait_for_input(devices: &[evdev::Device], timeout: Duration) {
+fn wait_for_input(devices: &[evdev::Device], extra: Option<std::os::fd::RawFd>, timeout: Duration) {
     use std::os::fd::AsRawFd;
     let mut fds: Vec<libc::pollfd> = devices
         .iter()
-        .map(|device| libc::pollfd {
-            fd: device.as_raw_fd(),
+        .map(AsRawFd::as_raw_fd)
+        .chain(extra)
+        .map(|fd| libc::pollfd {
+            fd,
             events: libc::POLLIN,
             revents: 0,
         })
@@ -513,7 +570,8 @@ fn wait_for_input(devices: &[evdev::Device], timeout: Duration) {
     let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
     // SAFETY: `fds` is a valid, initialised array of `fds.len()` pollfd
     // structs that outlives the call, and every fd in it stays open because
-    // `devices` is borrowed for the whole call. A failed or interrupted poll
+    // `devices` is borrowed for the whole call and the caller holds the
+    // reader behind `extra` until it returns. A failed or interrupted poll
     // only means the loop reads again sooner.
     unsafe {
         libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms);

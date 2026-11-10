@@ -11,7 +11,7 @@ use crate::types::{
     Action, DeviceModel, Edge, KeyId, MacroKind, MacroStep, MouseTarget, Profile, ProfileSwitch,
     ScrollDir, StickMode,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const KEY_DOWN: i32 = 1;
 const KEY_REPEAT: i32 = 2;
@@ -64,6 +64,14 @@ pub struct RemapEngine {
     model: DeviceModel,
     map: KeyMap,
     table: BTreeMap<KeyId, Action>,
+    /// The bindings used while Hypershift is held.
+    shift_table: BTreeMap<KeyId, Action>,
+    /// Whether Hypershift is down and acting as the layer key.
+    shift_held: bool,
+    /// Keys pressed through the Hypershift layer. Their repeat and release
+    /// go to the same layer even if Hypershift is let go first, so nothing
+    /// is left held.
+    shifted_keys: BTreeSet<KeyId>,
     macro_busy: bool,
     macro_play: Option<MacroPlay>,
     hold: Option<(KeyId, u64, u32)>,
@@ -108,6 +116,9 @@ impl RemapEngine {
             model,
             map: KeyMap::for_model(model),
             table: BTreeMap::new(),
+            shift_table: BTreeMap::new(),
+            shift_held: false,
+            shifted_keys: BTreeSet::new(),
             macro_busy: false,
             macro_play: None,
             hold: None,
@@ -129,6 +140,7 @@ impl RemapEngine {
 
     pub fn apply_profile(&mut self, p: &Profile) {
         self.table = p.bindings_for_model(self.model);
+        self.shift_table = p.hypershift_for_model(self.model);
         self.stick_mode = p.stick_mode;
     }
 
@@ -146,7 +158,12 @@ impl RemapEngine {
     /// While it does neither, the daemon leaves the V2 Pro's gamepad node to
     /// games as it is.
     pub fn binds_stick(&self) -> bool {
-        self.stick_mode.is_analog() || self.table.keys().any(|key| key.is_stick())
+        self.stick_mode.is_analog()
+            || self
+                .table
+                .keys()
+                .chain(self.shift_table.keys())
+                .any(|key| key.is_stick())
     }
 
     pub fn has_timed_work(&self) -> bool {
@@ -208,7 +225,7 @@ impl RemapEngine {
         let Some((key_id, last_ms, rate_ms)) = self.hold else {
             return;
         };
-        let Some(Action::HoldRepeat { inner, .. }) = self.table.get(&key_id).cloned() else {
+        let Some(Action::HoldRepeat { inner, .. }) = self.action_for(key_id) else {
             return;
         };
         let rate = u64::from(rate_ms);
@@ -419,6 +436,17 @@ impl RemapEngine {
         }
     }
 
+    /// The binding a held key is playing: its Hypershift one if it was
+    /// pressed through that layer, otherwise its own.
+    fn action_for(&self, key_id: KeyId) -> Option<Action> {
+        if self.shifted_keys.contains(&key_id) {
+            if let Some(action) = self.shift_table.get(&key_id) {
+                return Some(action.clone());
+            }
+        }
+        self.table.get(&key_id).cloned()
+    }
+
     fn dispatch(
         &mut self,
         key_id: KeyId,
@@ -427,7 +455,27 @@ impl RemapEngine {
         sink: &mut impl EventSink,
         clock: &mut impl Clock,
     ) {
-        match self.table.get(&key_id).cloned() {
+        // Unbound, Hypershift is the layer key: it sends nothing itself.
+        if key_id == KeyId::Hypershift && !self.table.contains_key(&key_id) {
+            match value {
+                KEY_DOWN => self.shift_held = true,
+                KEY_UP => self.shift_held = false,
+                _ => {}
+            }
+            return;
+        }
+        if value == KEY_DOWN {
+            if self.shift_held && self.shift_table.contains_key(&key_id) {
+                self.shifted_keys.insert(key_id);
+            } else {
+                self.shifted_keys.remove(&key_id);
+            }
+        }
+        let action = self.action_for(key_id);
+        if value == KEY_UP {
+            self.shifted_keys.remove(&key_id);
+        }
+        match action {
             // The virtual devices have no axes and no gamepad buttons, so an
             // unbound stick, hat or gamepad button has nothing to pass on.
             // In analog mode an unbound stick click is the virtual
@@ -677,6 +725,7 @@ mod tests {
             device_models: vec![DeviceModel::V2],
             bindings: BTreeMap::new(),
             model_bindings: BTreeMap::new(),
+            hypershift: BTreeMap::new(),
             stick_mode: StickMode::default(),
             lighting: Lighting {
                 effect: LightingEffect::None,
@@ -895,6 +944,7 @@ mod tests {
             device_models: vec![model],
             bindings: BTreeMap::new(),
             model_bindings: BTreeMap::new(),
+            hypershift: BTreeMap::new(),
             stick_mode: StickMode::default(),
             lighting: Lighting {
                 effect: LightingEffect::None,
@@ -1112,6 +1162,7 @@ mod tests {
             device_models: vec![DeviceModel::V2],
             bindings: BTreeMap::new(),
             model_bindings: BTreeMap::new(),
+            hypershift: BTreeMap::new(),
             stick_mode: StickMode::default(),
             lighting: Lighting {
                 effect: LightingEffect::None,
@@ -1524,5 +1575,128 @@ mod tests {
         let tab = crate::keymap::token_to_evdev(KeyToken::Tab);
         e.handle(v2_pro_event(1, tab, 1), &mut s, &mut c);
         assert_eq!(s.0.last().map(|x| (x.code, x.value)), Some((tab, 1)));
+    }
+
+    fn hypershift_engine(base_kp01: Option<Action>, shift_kp01: Action) -> RemapEngine {
+        let mut p: Profile = serde_json::from_str(
+            r#"{"id":"t","name":"t","game":"default","device_models":["v2pro"],
+                "bindings":{},"lighting":{"effect":"none","brightness":80}}"#,
+        )
+        .unwrap();
+        if let Some(action) = base_kp01 {
+            p.bindings.insert(KeyId::Kp01, action);
+        }
+        p.hypershift.insert(KeyId::Kp01, shift_kp01);
+        let mut e = RemapEngine::new(DeviceModel::V2Pro);
+        e.apply_profile(&p);
+        e
+    }
+
+    fn key(token: KeyToken) -> Action {
+        Action::Key {
+            key: token,
+            modifiers: vec![],
+        }
+    }
+
+    const KEY_1_CODE: u16 = 2;
+
+    fn codes(s: &FakeSink) -> Vec<(u16, i32)> {
+        s.0.iter().map(|x| (x.code, x.value)).collect()
+    }
+
+    #[test]
+    fn holding_hypershift_plays_the_layer_and_sends_nothing_itself() {
+        let mut e = hypershift_engine(Some(key(KeyToken::Q)), key(KeyToken::F5));
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let fn_key = crate::keymap::KEY_FN;
+        e.handle(v2_pro_event(1, fn_key, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 0), &mut s, &mut c);
+        e.handle(v2_pro_event(1, fn_key, 0), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 0), &mut s, &mut c);
+        let f5 = token_to_evdev(KeyToken::F5);
+        let q = token_to_evdev(KeyToken::Q);
+        assert_eq!(codes(&s), vec![(f5, 1), (f5, 0), (q, 1), (q, 0)]);
+    }
+
+    #[test]
+    fn a_key_released_after_hypershift_releases_what_it_pressed() {
+        let mut e = hypershift_engine(Some(key(KeyToken::Q)), key(KeyToken::F5));
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let fn_key = crate::keymap::KEY_FN;
+        e.handle(v2_pro_event(1, fn_key, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, fn_key, 0), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 0), &mut s, &mut c);
+        let f5 = token_to_evdev(KeyToken::F5);
+        assert_eq!(codes(&s), vec![(f5, 1), (f5, 0)]);
+
+        // And the other way round: pressed plain, released under Hypershift.
+        let mut s = FakeSink(vec![]);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, fn_key, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 0), &mut s, &mut c);
+        let q = token_to_evdev(KeyToken::Q);
+        assert_eq!(codes(&s), vec![(q, 1), (q, 0)]);
+    }
+
+    #[test]
+    fn a_key_without_a_layer_binding_keeps_its_own_under_hypershift() {
+        let mut e = hypershift_engine(None, key(KeyToken::F5));
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let fn_key = crate::keymap::KEY_FN;
+        let grave = 41;
+        e.handle(v2_pro_event(1, fn_key, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, grave, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, grave, 0), &mut s, &mut c);
+        assert_eq!(
+            codes(&s),
+            vec![(grave, 1), (grave, 0)],
+            "kp21 passes through"
+        );
+    }
+
+    #[test]
+    fn a_bound_hypershift_is_a_plain_key_and_opens_no_layer() {
+        let mut e = hypershift_engine(Some(key(KeyToken::Q)), key(KeyToken::F5));
+        let p: Profile = serde_json::from_str(
+            r#"{"id":"t","name":"t","game":"default","device_models":["v2pro"],
+                "bindings":{"kp01":{"type":"key","key":"q","modifiers":[]},
+                            "hypershift":{"type":"key","key":"m","modifiers":[]}},
+                "hypershift":{"kp01":{"type":"key","key":"f5","modifiers":[]}},
+                "lighting":{"effect":"none","brightness":80}}"#,
+        )
+        .unwrap();
+        p.validate().unwrap();
+        e.apply_profile(&p);
+        let mut s = FakeSink(vec![]);
+        let mut c = FakeClock { t: 0 };
+        let fn_key = crate::keymap::KEY_FN;
+        e.handle(v2_pro_event(1, fn_key, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 1), &mut s, &mut c);
+        e.handle(v2_pro_event(1, KEY_1_CODE, 0), &mut s, &mut c);
+        e.handle(v2_pro_event(1, fn_key, 0), &mut s, &mut c);
+        let m = token_to_evdev(KeyToken::M);
+        let q = token_to_evdev(KeyToken::Q);
+        assert_eq!(codes(&s), vec![(m, 1), (q, 1), (q, 0), (m, 0)]);
+    }
+
+    #[test]
+    fn a_stick_bound_only_in_the_layer_still_takes_the_stick() {
+        let p: Profile = serde_json::from_str(
+            r#"{"id":"t","name":"t","game":"default","device_models":["v2pro"],
+                "bindings":{},"hypershift":{"analog_up":{"type":"key","key":"w","modifiers":[]}},
+                "lighting":{"effect":"none","brightness":80}}"#,
+        )
+        .unwrap();
+        p.validate().unwrap();
+        let mut e = RemapEngine::new(DeviceModel::V2Pro);
+        e.apply_profile(&p);
+        assert!(e.binds_stick());
     }
 }

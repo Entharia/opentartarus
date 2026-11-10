@@ -11,7 +11,9 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use opentartarus_core::constants::{STICK_ROTATION_MAX_DEG, STICK_ROTATION_STEP_DEG};
 use opentartarus_core::labels::{bind_label, key_display_name_for, key_position_text_for};
-use opentartarus_core::types::{Action, KeyToken, MouseButton, MouseTarget, ScrollDir, StickMode};
+use opentartarus_core::types::{
+    Action, KeyId, KeyToken, Layer, MouseButton, MouseTarget, ScrollDir, StickMode,
+};
 
 pub const MOUSE_TARGETS: [(&str, MouseTarget); 7] = [
     (
@@ -387,6 +389,18 @@ fn stick_controls(app: &App) -> Element<'_, Message> {
         .into()
 }
 
+/// What the inspector says about Hypershift for the selected key, if
+/// anything: how the Hypershift key behaves, or that an edit lands in the
+/// Hypershift layer.
+pub fn layer_note(layer: Layer, key_id: KeyId, action: Option<&Action>) -> Option<&'static str> {
+    match (layer, key_id, action) {
+        (Layer::Hypershift, _, _) => Some(theme::HYPERSHIFT_LAYER_HINT),
+        (Layer::Base, KeyId::Hypershift, None) => Some(theme::HYPERSHIFT_KEY_HINT),
+        (Layer::Base, KeyId::Hypershift, Some(_)) => Some(theme::HYPERSHIFT_KEY_BOUND_HINT),
+        _ => None,
+    }
+}
+
 pub fn inspector(app: &App) -> Element<'_, Message> {
     let content: Element<'_, Message> = match app.selected_key {
         None => empty_state(app),
@@ -430,6 +444,13 @@ pub fn inspector(app: &App) -> Element<'_, Message> {
             ]
             .spacing(theme::SPACE_MD);
 
+            if let Some(note) = layer_note(app.shown_layer(), key_id, action.as_ref()) {
+                panel = panel.push(
+                    text(note)
+                        .size(theme::TEXT_SMALL)
+                        .color(theme::COLOR_TEXT_DIM),
+                );
+            }
             if app.shows_stick_settings() {
                 panel = panel.push(stick_controls(app));
             }

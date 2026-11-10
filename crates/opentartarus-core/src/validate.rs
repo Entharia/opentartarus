@@ -3,7 +3,8 @@ use crate::constants::{
 };
 use crate::error::ErrorCode;
 use crate::types::{
-    Action, DeviceModel, KeyId, Lighting, LightingEffect, MacroKind, MacroStep, Modifier, Profile,
+    Action, DeviceModel, KeyId, Layer, Lighting, LightingEffect, MacroKind, MacroStep, Modifier,
+    Profile,
 };
 use std::collections::BTreeMap;
 
@@ -44,6 +45,17 @@ impl Profile {
                 validate_action(action)?;
             }
         }
+        // The Hypershift layer is the V2 Pro's, and the button that reaches
+        // it cannot also be bound inside it.
+        if !self.hypershift.is_empty() && !self.device_models.contains(&DeviceModel::V2Pro) {
+            return Err(ErrorCode::InvalidProfile);
+        }
+        for (key, action) in &self.hypershift {
+            if !DeviceModel::V2Pro.has_key(*key) || *key == KeyId::Hypershift {
+                return Err(ErrorCode::UnknownKey);
+            }
+            validate_action(action)?;
+        }
         Ok(())
     }
 
@@ -62,6 +74,39 @@ impl Profile {
             Some(m) => self.model_bindings.entry(m).or_default(),
             None => &mut self.bindings,
         }
+    }
+
+    /// The bindings shown and edited for `layer` on `model`. The Hypershift
+    /// layer is one set for the V2 Pro, the only pad with the button.
+    pub fn layer(&self, model: Option<DeviceModel>, layer: Layer) -> &BTreeMap<KeyId, Action> {
+        match layer {
+            Layer::Base => self.layout(model),
+            Layer::Hypershift => &self.hypershift,
+        }
+    }
+
+    pub fn layer_mut(
+        &mut self,
+        model: Option<DeviceModel>,
+        layer: Layer,
+    ) -> &mut BTreeMap<KeyId, Action> {
+        match layer {
+            Layer::Base => self.layout_mut(model),
+            Layer::Hypershift => &mut self.hypershift,
+        }
+    }
+
+    /// The Hypershift layer the engine uses on `model`: empty on a pad
+    /// without the button.
+    pub fn hypershift_for_model(&self, model: DeviceModel) -> BTreeMap<KeyId, Action> {
+        if !model.has_key(KeyId::Hypershift) {
+            return BTreeMap::new();
+        }
+        self.hypershift
+            .iter()
+            .filter(|(key, _)| model.has_key(**key))
+            .map(|(key, action)| (*key, action.clone()))
+            .collect()
     }
 
     pub fn bindings_for_model(&self, model: DeviceModel) -> BTreeMap<KeyId, Action> {
@@ -513,6 +558,58 @@ mod tests {
             "lighting":{"effect":"none","brightness":80}}"#;
         let bad: Profile = serde_json::from_str(raw).unwrap();
         assert_eq!(bad.validate().unwrap_err(), ErrorCode::InvalidProfile);
+    }
+
+    #[test]
+    fn the_hypershift_layer_is_for_v2_pro_keys_other_than_hypershift() {
+        let mut p: Profile = serde_json::from_str(lol_json()).unwrap();
+        let space = Action::Key {
+            key: crate::types::KeyToken::Space,
+            modifiers: vec![],
+        };
+        p.hypershift.insert(KeyId::Kp21, space.clone());
+        assert_eq!(
+            p.validate().unwrap_err(),
+            ErrorCode::InvalidProfile,
+            "a layer for a pad the profile does not support"
+        );
+        p.device_models.push(DeviceModel::V2Pro);
+        assert!(p.validate().is_ok());
+        p.hypershift.insert(KeyId::Hypershift, space.clone());
+        assert_eq!(p.validate().unwrap_err(), ErrorCode::UnknownKey);
+        p.hypershift.remove(&KeyId::Hypershift);
+        p.hypershift.insert(KeyId::WheelUp, space);
+        assert_eq!(p.validate().unwrap_err(), ErrorCode::UnknownKey);
+    }
+
+    #[test]
+    fn the_hypershift_layer_is_edited_apart_and_used_only_on_the_v2_pro() {
+        let mut p: Profile = serde_json::from_str(lol_json()).unwrap();
+        p.device_models.push(DeviceModel::V2Pro);
+        let b = Action::Key {
+            key: crate::types::KeyToken::B,
+            modifiers: vec![],
+        };
+        p.layer_mut(Some(DeviceModel::V2Pro), Layer::Hypershift)
+            .insert(KeyId::Kp01, b.clone());
+        assert_eq!(p.hypershift, BTreeMap::from([(KeyId::Kp01, b.clone())]));
+        assert_ne!(p.bindings.get(&KeyId::Kp01), Some(&b), "base untouched");
+        assert_eq!(
+            p.layer(Some(DeviceModel::V2Pro), Layer::Base),
+            p.layout(Some(DeviceModel::V2Pro))
+        );
+        assert_eq!(p.hypershift_for_model(DeviceModel::V2Pro).len(), 1);
+        assert!(p.hypershift_for_model(DeviceModel::V2).is_empty());
+
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Profile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.hypershift, p.hypershift);
+        p.hypershift.clear();
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(
+            !json.contains("hypershift"),
+            "an empty layer is not written"
+        );
     }
 
     #[test]

@@ -77,6 +77,16 @@ pub const STICK_MODE_KEYS4: &str = "Keys, 4 directions";
 pub const STICK_MODE_ANALOG_LEFT: &str = "Analog: left stick";
 pub const STICK_MODE_ANALOG_RIGHT: &str = "Analog: right stick";
 pub const STICK_ANALOG_HINT: &str = "Games see a controller stick. Bound directions are ignored.";
+/// The V2 Pro's Hypershift key, as its cap reads on the keypad.
+pub const HYPERSHIFT_GLYPH: &str = "Hyper";
+pub const LAYER_BASE: &str = "Normal";
+pub const LAYER_HYPERSHIFT: &str = "Hypershift";
+pub const HYPERSHIFT_LAYER_HINT: &str =
+    "What keys send while Hypershift is held. A key left empty sends its normal binding.";
+pub const HYPERSHIFT_KEY_HINT: &str =
+    "Unbound, hold it to use the Hypershift layer. Bind it to use it as a normal key.";
+pub const HYPERSHIFT_KEY_BOUND_HINT: &str =
+    "Bound, it is a normal key and the Hypershift layer is off. Clear it to use the layer.";
 pub const HELD_SHIFT: &str = "Shift";
 pub const HELD_CTRL: &str = "Ctrl";
 pub const HELD_ALT: &str = "Alt";

@@ -22,8 +22,8 @@ use opentartarus_core::pack;
 use opentartarus_core::paths::Paths;
 use opentartarus_core::store;
 use opentartarus_core::types::{
-    Action, DeviceModel, Edge, KeyId, KeyToken, Lighting, LightingEffect, MacroKind, MacroStep,
-    Modifier, MouseTarget, Profile, StickMode,
+    Action, DeviceModel, Edge, KeyId, KeyToken, Layer, Lighting, LightingEffect, MacroKind,
+    MacroStep, Modifier, MouseTarget, Profile, StickMode,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -146,6 +146,8 @@ pub enum Message {
     NextProfilePick,
     /// Binds the selected key to jump to one profile.
     SwitchProfilePick(ProfileChoice),
+    /// Shows and edits the normal bindings or the Hypershift layer.
+    SelectLayer(Layer),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +205,10 @@ pub struct App {
     pub uinput_ok: bool,
     pub grab_conflict: Option<String>,
     pub bindings: BTreeMap<KeyId, Action>,
+    /// The active profile's Hypershift layer (V2 Pro only).
+    pub hypershift_bindings: BTreeMap<KeyId, Action>,
+    /// The layer the keypad shows and edits. See `shown_layer`.
+    pub layer: Layer,
     pub lighting: Lighting,
     /// The active profile's in-game setup step, shown while no key is
     /// selected. Most profiles have none.
@@ -244,6 +250,8 @@ impl Default for App {
             uinput_ok: true,
             grab_conflict: None,
             bindings: BTreeMap::new(),
+            hypershift_bindings: BTreeMap::new(),
+            layer: Layer::Base,
             lighting: Lighting {
                 effect: LightingEffect::None,
                 brightness: theme::DEFAULT_BRIGHTNESS,
@@ -344,11 +352,24 @@ impl App {
                 self.combo_focused = false;
                 Task::none()
             }
+            Message::SelectLayer(layer) => {
+                self.layer = layer;
+                if self.shown_layer() == Layer::Hypershift
+                    && self.selected_key == Some(KeyId::Hypershift)
+                {
+                    self.selected_key = None;
+                }
+                Task::none()
+            }
             Message::Record => {
                 if let Some(key_id) = self.selected_key {
                     self.send(
                         Method::StartRecord,
-                        json!({ "key_id": key_id, "timeout_ms": RECORD_TIMEOUT_MS }),
+                        json!({
+                            "key_id": key_id,
+                            "layer": self.shown_layer(),
+                            "timeout_ms": RECORD_TIMEOUT_MS,
+                        }),
                     );
                     self.recording = true;
                 }
@@ -361,10 +382,11 @@ impl App {
             }
             Message::ClearBinding => {
                 if let (Some(profile_id), Some(key_id)) = (self.profile_id(), self.selected_key) {
-                    self.bindings.remove(&key_id);
+                    let layer = self.shown_layer();
+                    self.shown_bindings_mut().remove(&key_id);
                     self.send(
                         Method::ClearBinding,
-                        json!({ "profile_id": profile_id, "key_id": key_id }),
+                        json!({ "profile_id": profile_id, "key_id": key_id, "layer": layer }),
                     );
                 }
                 Task::none()
@@ -475,10 +497,15 @@ impl App {
                         if let (Some(profile_id), Some(key_id)) =
                             (self.profile_id(), self.selected_key)
                         {
-                            self.bindings.remove(&key_id);
+                            let layer = self.shown_layer();
+                            self.shown_bindings_mut().remove(&key_id);
                             self.send(
                                 Method::ClearBinding,
-                                json!({ "profile_id": profile_id, "key_id": key_id }),
+                                json!({
+                                    "profile_id": profile_id,
+                                    "key_id": key_id,
+                                    "layer": layer,
+                                }),
                             );
                         }
                     } else {
@@ -767,7 +794,58 @@ impl App {
 
     pub fn selected_action(&self) -> Option<Action> {
         self.selected_key
-            .and_then(|id| self.bindings.get(&id).cloned())
+            .and_then(|id| self.shown_bindings().get(&id).cloned())
+    }
+
+    /// The layer the keypad shows. Only the V2 Pro has Hypershift, so any
+    /// other pad always shows its normal bindings.
+    pub fn shown_layer(&self) -> Layer {
+        if self.model == Some(DeviceModel::V2Pro) {
+            self.layer
+        } else {
+            Layer::Base
+        }
+    }
+
+    pub fn shown_bindings(&self) -> &BTreeMap<KeyId, Action> {
+        self.bindings_for(self.shown_layer())
+    }
+
+    fn shown_bindings_mut(&mut self) -> &mut BTreeMap<KeyId, Action> {
+        match self.shown_layer() {
+            Layer::Base => &mut self.bindings,
+            Layer::Hypershift => &mut self.hypershift_bindings,
+        }
+    }
+
+    fn bindings_for(&self, layer: Layer) -> &BTreeMap<KeyId, Action> {
+        match layer {
+            Layer::Base => &self.bindings,
+            Layer::Hypershift => &self.hypershift_bindings,
+        }
+    }
+
+    /// Stores a binding the daemon recorded, in the layer it was recorded
+    /// for, which may no longer be the one on show.
+    fn store_recorded(&mut self, result: &Value) {
+        let Ok(key_id) =
+            serde_json::from_value::<KeyId>(result.get("key_id").cloned().unwrap_or(Value::Null))
+        else {
+            return;
+        };
+        let Ok(action) =
+            serde_json::from_value::<Action>(result.get("action").cloned().unwrap_or(Value::Null))
+        else {
+            return;
+        };
+        let layer = result
+            .get("layer")
+            .and_then(|v| serde_json::from_value::<Layer>(v.clone()).ok())
+            .unwrap_or_default();
+        match layer {
+            Layer::Base => self.bindings.insert(key_id, action),
+            Layer::Hypershift => self.hypershift_bindings.insert(key_id, action),
+        };
     }
 
     /// Every profile the switch-profile picker can jump to, in list order.
@@ -846,12 +924,14 @@ impl App {
 
     fn apply_action(&mut self, action: Action) {
         if let (Some(profile_id), Some(key_id)) = (self.profile_id(), self.selected_key) {
-            self.bindings.insert(key_id, action.clone());
+            let layer = self.shown_layer();
+            self.shown_bindings_mut().insert(key_id, action.clone());
             self.send(
                 Method::SetBinding,
                 json!({
                     "profile_id": profile_id,
                     "key_id": key_id,
+                    "layer": layer,
                     "action": action,
                 }),
             );
@@ -916,15 +996,7 @@ impl App {
             }
             Some(Method::SubmitRecord) => {
                 self.recording = false;
-                if let Ok(key_id) = serde_json::from_value::<KeyId>(
-                    result.get("key_id").cloned().unwrap_or(Value::Null),
-                ) {
-                    if let Ok(action) = serde_json::from_value::<Action>(
-                        result.get("action").cloned().unwrap_or(Value::Null),
-                    ) {
-                        self.bindings.insert(key_id, action);
-                    }
-                }
+                self.store_recorded(&result);
             }
             _ => {}
         }
@@ -938,16 +1010,7 @@ impl App {
             }
             EventMethod::Recorded => {
                 self.recording = false;
-                if let Ok(action) = serde_json::from_value::<Action>(
-                    params.get("action").cloned().unwrap_or(Value::Null),
-                ) {
-                    if let Some(key_id) = params
-                        .get("key_id")
-                        .and_then(|v| serde_json::from_value::<KeyId>(v.clone()).ok())
-                    {
-                        self.bindings.insert(key_id, action);
-                    }
-                }
+                self.store_recorded(&params);
                 Task::none()
             }
             EventMethod::RecordCancelled => {
@@ -1104,6 +1167,7 @@ impl App {
     fn load_profile(&mut self, id: &str) {
         if let Some(profile) = read_profile(id) {
             self.bindings = profile.layout(self.model).clone();
+            self.hypershift_bindings = profile.hypershift;
             self.lighting = profile.lighting;
             self.setup_note = profile.setup_note;
             self.stick_mode = profile.stick_mode;
@@ -1947,6 +2011,51 @@ mod tests {
             error: None,
         });
         assert_eq!(app.stick_rotation_deg, -90);
+    }
+
+    #[test]
+    fn the_hypershift_layer_is_edited_on_its_own_and_only_on_the_v2_pro() {
+        let (tx, mut rx) = mpsc::unbounded();
+        let mut app = app_with_profiles();
+        app.ipc_tx = Some(tx);
+        app.layer = Layer::Hypershift;
+        app.model = Some(DeviceModel::V2);
+        assert_eq!(app.shown_layer(), Layer::Base, "only the V2 Pro has it");
+
+        app.model = Some(DeviceModel::V2Pro);
+        app.selected_key = Some(KeyId::Kp01);
+        let _ = app.update(Message::NextProfilePick);
+        let outgoing = rx.try_recv().unwrap();
+        assert_eq!(outgoing.method, Method::SetBinding);
+        assert_eq!(outgoing.params["layer"], "hypershift");
+        assert_eq!(
+            app.hypershift_bindings.get(&KeyId::Kp01),
+            Some(&Action::NextProfile)
+        );
+        assert!(!app.bindings.contains_key(&KeyId::Kp01), "normal untouched");
+
+        let _ = app.update(Message::ClearBinding);
+        let outgoing = rx.try_recv().unwrap();
+        assert_eq!(outgoing.method, Method::ClearBinding);
+        assert_eq!(outgoing.params["layer"], "hypershift");
+        assert!(app.hypershift_bindings.is_empty());
+
+        // A recording lands in the layer it was started for.
+        app.layer = Layer::Base;
+        let _ = app.handle_event(
+            EventMethod::Recorded,
+            json!({
+                "key_id": "kp02",
+                "layer": "hypershift",
+                "action": { "type": "next_profile" },
+            }),
+        );
+        assert!(app.hypershift_bindings.contains_key(&KeyId::Kp02));
+        assert!(!app.bindings.contains_key(&KeyId::Kp02));
+
+        app.selected_key = Some(KeyId::Hypershift);
+        let _ = app.update(Message::SelectLayer(Layer::Hypershift));
+        assert_eq!(app.selected_key, None, "Hypershift has no layer binding");
     }
 
     #[test]

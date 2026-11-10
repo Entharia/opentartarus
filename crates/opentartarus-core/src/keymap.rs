@@ -130,6 +130,9 @@ const KEY_PAUSE: u16 = 119;
 const KEY_LEFTMETA: u16 = 125;
 const KEY_RIGHTMETA: u16 = 126;
 const KEY_F24: u16 = 194;
+/// What the daemon reports the V2 Pro's Hypershift button as. The pad sends
+/// it only on its Razer HID interface, never as an input event.
+pub const KEY_FN: u16 = 464;
 /// The gamepad's left-stick click. The V2 Pro's thumbstick click sends it.
 pub const BTN_THUMBL: u16 = 317;
 pub const BTN_THUMBR: u16 = 318;
@@ -208,6 +211,7 @@ const V2_PRO_KEYS: &[(KeyId, u16, u16)] = &[
     (KeyId::StickClick, EV_KEY, BTN_THUMBL),
     // The click of the stick when Synapse set it to act as the right stick.
     (KeyId::StickClick, EV_KEY, BTN_THUMBR),
+    (KeyId::Hypershift, EV_KEY, KEY_FN),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

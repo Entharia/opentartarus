@@ -12,8 +12,8 @@ use opentartarus_core::store::{
     revert_to_shipped, write_active_id, write_profile, write_stick_rotation,
 };
 use opentartarus_core::types::{
-    Action, DeviceModel, GameId, KeyId, KeyToken, Lighting, Modifier, MouseButton, MouseTarget,
-    Profile, ProfileSwitch, ScrollDir, StickMode,
+    Action, DeviceModel, GameId, KeyId, KeyToken, Layer, Lighting, Modifier, MouseButton,
+    MouseTarget, Profile, ProfileSwitch, ScrollDir, StickMode,
 };
 use opentartarus_core::validate::{profile_id_for_name, valid_stick_rotation};
 use serde_json::{json, Value};
@@ -36,6 +36,8 @@ pub struct DaemonState<L: LightingClient> {
     pub grab_conflict: Option<String>,
     /// The thumbstick rotation, kept here so a fresh engine gets it too.
     pub stick_rotation_deg: i32,
+    /// The layer the key being recorded is bound in.
+    pub record_layer: Layer,
 }
 
 pub fn handle_request<L: LightingClient>(
@@ -185,6 +187,14 @@ fn param_key_id(params: &Value) -> Result<KeyId, ErrorCode> {
     parse_key_id(params.get("key_id").unwrap_or(&Value::Null))
 }
 
+/// The layer an edit is for: `"base"` when the request names none.
+fn param_layer(params: &Value) -> Result<Layer, ErrorCode> {
+    match params.get("layer") {
+        None | Some(Value::Null) => Ok(Layer::Base),
+        Some(v) => serde_json::from_value(v.clone()).map_err(|_| ErrorCode::InvalidProfile),
+    }
+}
+
 fn apply_lighting_soft<L: LightingClient>(
     state: &mut DaemonState<L>,
     lighting: &Lighting,
@@ -270,11 +280,12 @@ fn set_binding<L: LightingClient>(
 ) -> Result<Value, ErrorCode> {
     let profile_id = require_string(params, "profile_id")?;
     let key_id = param_key_id(params)?;
+    let layer = param_layer(params)?;
     let action: Action =
         serde_json::from_value(params.get("action").cloned().unwrap_or(Value::Null))
             .map_err(|_| ErrorCode::InvalidProfile)?;
     let mut profile = load_user_copy(state, &profile_id)?;
-    profile.layout_mut(state.model).insert(key_id, action);
+    profile.layer_mut(state.model, layer).insert(key_id, action);
     persist_profile(state, &mut profile, false)?;
     Ok(json!({ "id": profile_id }))
 }
@@ -285,8 +296,9 @@ fn clear_binding<L: LightingClient>(
 ) -> Result<Value, ErrorCode> {
     let profile_id = require_string(params, "profile_id")?;
     let key_id = param_key_id(params)?;
+    let layer = param_layer(params)?;
     let mut profile = load_user_copy(state, &profile_id)?;
-    profile.layout_mut(state.model).remove(&key_id);
+    profile.layer_mut(state.model, layer).remove(&key_id);
     persist_profile(state, &mut profile, false)?;
     Ok(json!({ "id": profile_id }))
 }
@@ -327,13 +339,16 @@ fn start_record<L: LightingClient>(
     now_ms: u64,
 ) -> Result<Value, ErrorCode> {
     let key_id = param_key_id(params)?;
+    let layer = param_layer(params)?;
     let timeout_ms = params.get("timeout_ms").and_then(Value::as_u64);
     let timeout = timeout_ms
         .unwrap_or(RECORD_TIMEOUT_MS)
         .min(RECORD_TIMEOUT_MAX_MS);
     state.recorder.start(key_id, timeout_ms, now_ms)?;
+    state.record_layer = layer;
     Ok(json!({
         "key_id": key_id,
+        "layer": layer,
         "timeout_ms": timeout,
     }))
 }
@@ -377,12 +392,14 @@ fn submit_record<L: LightingClient>(
     match outcome {
         RecordOutcome::Recorded { key_id, action } => {
             let mut profile = load_user_copy(state, &profile_id)?;
+            let layer = state.record_layer;
             profile
-                .layout_mut(state.model)
+                .layer_mut(state.model, layer)
                 .insert(key_id, action.clone());
             persist_profile(state, &mut profile, false)?;
             Ok(json!({
                 "key_id": key_id,
+                "layer": layer,
                 "action": action,
             }))
         }
@@ -552,6 +569,7 @@ mod tests {
             uinput_ok: true,
             grab_conflict: None,
             stick_rotation_deg: 0,
+            record_layer: Layer::Base,
         }
     }
 
@@ -753,6 +771,81 @@ mod tests {
             }),
             "the edit lands on the custom copy"
         );
+    }
+
+    #[test]
+    fn edits_and_recordings_can_target_the_hypershift_layer() {
+        let mut st = state();
+        st.model = Some(DeviceModel::V2Pro);
+        st.engine = RemapEngine::new(DeviceModel::V2Pro);
+        handle_request(&mut st, Method::ApplyProfile, json!({"id": "deadlock"}), 0).unwrap();
+        let base_kp01 = load_user_copy(&st, "deadlock")
+            .unwrap()
+            .layout(st.model)
+            .get(&KeyId::Kp01)
+            .cloned();
+        handle_request(
+            &mut st,
+            Method::SetBinding,
+            json!({
+                "profile_id": "deadlock",
+                "key_id": "kp01",
+                "layer": "hypershift",
+                "action": { "type": "key", "key": "f5", "modifiers": [] }
+            }),
+            1,
+        )
+        .unwrap();
+        let saved = read_user_profile(&st.paths, "deadlock").unwrap();
+        let f5 = Action::Key {
+            key: KeyToken::F5,
+            modifiers: vec![],
+        };
+        assert_eq!(saved.hypershift.get(&KeyId::Kp01), Some(&f5));
+        assert_eq!(saved.layout(st.model).get(&KeyId::Kp01).cloned(), base_kp01);
+
+        let err = handle_request(
+            &mut st,
+            Method::SetBinding,
+            json!({
+                "profile_id": "deadlock",
+                "key_id": "hypershift",
+                "layer": "hypershift",
+                "action": { "type": "key", "key": "f5", "modifiers": [] }
+            }),
+            2,
+        )
+        .unwrap_err();
+        assert_eq!(err, ErrorCode::UnknownKey, "Hypershift cannot shift itself");
+
+        handle_request(
+            &mut st,
+            Method::StartRecord,
+            json!({"key_id": "kp02", "layer": "hypershift"}),
+            3,
+        )
+        .unwrap();
+        let recorded = handle_request(
+            &mut st,
+            Method::SubmitRecord,
+            json!({"key": "f6", "modifiers": []}),
+            4,
+        )
+        .unwrap();
+        assert_eq!(recorded["layer"], "hypershift");
+        let saved = read_user_profile(&st.paths, "deadlock").unwrap();
+        assert!(saved.hypershift.contains_key(&KeyId::Kp02));
+
+        handle_request(
+            &mut st,
+            Method::ClearBinding,
+            json!({"profile_id": "deadlock", "key_id": "kp01", "layer": "hypershift"}),
+            5,
+        )
+        .unwrap();
+        let saved = read_user_profile(&st.paths, "deadlock").unwrap();
+        assert!(!saved.hypershift.contains_key(&KeyId::Kp01));
+        assert_eq!(saved.layout(st.model).get(&KeyId::Kp01).cloned(), base_kp01);
     }
 
     #[test]
@@ -994,6 +1087,7 @@ mod tests {
             uinput_ok: true,
             grab_conflict: None,
             stick_rotation_deg: 0,
+            record_layer: Layer::Base,
         };
         let v = handle_request(&mut st, Method::ApplyProfile, json!({"id":"default"}), 0).unwrap();
         assert_eq!(v["id"], "default");

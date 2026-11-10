@@ -1,5 +1,6 @@
 pub mod device;
 pub mod handler;
+pub mod hypershift;
 pub mod log;
 pub mod openrazer;
 pub mod openrgb;

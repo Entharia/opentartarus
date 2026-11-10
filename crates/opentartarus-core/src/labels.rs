@@ -88,6 +88,7 @@ const POSITION_THUMB_PAD: &str = "thumb pad";
 const POSITION_ANALOG: &str = "analog stick";
 const POSITION_WHEEL: &str = "wheel";
 const POSITION_WHEEL_COLUMN: &str = "wheel column";
+const POSITION_HYPERSHIFT: &str = "hold for the Hypershift layer";
 
 /// Keycap labels for the profile-switch actions. Short, because a cap is
 /// narrow; the inspector spells out which profile.
@@ -126,6 +127,7 @@ pub fn key_display_name(id: KeyId) -> String {
         KeyId::Kp26 => String::from("Key 26"),
         KeyId::Kp27 => String::from("Key 27"),
         KeyId::StickClick => String::from("Stick click"),
+        KeyId::Hypershift => String::from("Hypershift"),
         KeyId::WheelUp => String::from("Wheel up"),
         KeyId::WheelDown => String::from("Wheel down"),
         KeyId::WheelClick => String::from("Wheel click"),
@@ -204,6 +206,7 @@ pub fn key_position_text(id: KeyId) -> String {
             String::from(POSITION_ANALOG)
         }
         KeyId::StickClick => String::from(POSITION_THUMBSTICK),
+        KeyId::Hypershift => String::from(POSITION_HYPERSHIFT),
         id if id.is_v2_pro_only() => v2_pro_grid_position(id)
             .map(|(row, column)| format!("row {} · key {}", row + 1, column + 1))
             .unwrap_or_else(|| String::from(POSITION_THUMB_PAD)),
@@ -500,7 +503,8 @@ mod tests {
         let mut seen = Vec::new();
         for id in KeyId::ALL {
             let on_face = v2_pro_grid_position(id).is_some();
-            let expected = DeviceModel::V2Pro.has_key(id) && !id.is_stick();
+            let expected =
+                DeviceModel::V2Pro.has_key(id) && !id.is_stick() && id != KeyId::Hypershift;
             assert_eq!(on_face, expected, "{id:?}");
             if on_face {
                 seen.push(v2_pro_key_number(id).unwrap());

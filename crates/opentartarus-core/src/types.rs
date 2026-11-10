@@ -133,14 +133,19 @@ pub enum KeyId {
     AnalogRight,
     #[serde(rename = "stick_click")]
     StickClick,
+    /// The V2 Pro's Hypershift button. The pad reports it only on its Razer
+    /// HID interface, and the daemon turns that into a press of this key.
+    /// Unbound, it is held to reach the profile's Hypershift layer.
+    #[serde(rename = "hypershift")]
+    Hypershift,
 }
 
 impl KeyId {
     /// Every physical key, in declaration order.
     /// 20 grid keys + 3 wheel + mode + 8 thumb directions + 4 analog = 36,
-    /// plus the V2 Pro's 7 extra keys and stick click = 44.
+    /// plus the V2 Pro's 7 extra keys, stick click and Hypershift = 45.
     /// Used by exhaustive tests and by the keypad widget's geometry check.
-    pub const ALL: [KeyId; 44] = [
+    pub const ALL: [KeyId; 45] = [
         KeyId::Kp01,
         KeyId::Kp02,
         KeyId::Kp03,
@@ -185,6 +190,7 @@ impl KeyId {
         KeyId::Kp26,
         KeyId::Kp27,
         KeyId::StickClick,
+        KeyId::Hypershift,
     ];
 
     /// Keys only the Tartarus V2 Pro has.
@@ -199,6 +205,7 @@ impl KeyId {
                 | Self::Kp26
                 | Self::Kp27
                 | Self::StickClick
+                | Self::Hypershift
         )
     }
 
@@ -552,6 +559,16 @@ impl StickMode {
     }
 }
 
+/// Which set of bindings a key uses: the profile's own, or the Hypershift
+/// layer, used while the V2 Pro's Hypershift button is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layer {
+    #[default]
+    Base,
+    Hypershift,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProfileDe {
     id: String,
@@ -561,6 +578,8 @@ struct ProfileDe {
     bindings: BTreeMap<String, Action>,
     #[serde(default)]
     model_bindings: BTreeMap<DeviceModel, BTreeMap<String, Action>>,
+    #[serde(default)]
+    hypershift: BTreeMap<String, Action>,
     #[serde(default)]
     stick_mode: StickMode,
     lighting: Lighting,
@@ -584,6 +603,10 @@ pub struct Profile {
     /// model without an entry here uses `bindings`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_bindings: BTreeMap<DeviceModel, BTreeMap<KeyId, Action>>,
+    /// What keys do while Hypershift is held. Only the V2 Pro has the
+    /// button. A key with no binding here keeps its normal one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hypershift: BTreeMap<KeyId, Action>,
     /// What the thumbstick does with this profile. Rotation is not here: it
     /// is about the player's hand, so it is one setting for every profile.
     #[serde(default, skip_serializing_if = "StickMode::is_default")]
@@ -626,6 +649,7 @@ impl From<ProfileDe> for Profile {
             .into_iter()
             .map(|(model, layout)| (model, parse(layout)))
             .collect();
+        let hypershift = parse(raw.hypershift);
         Self {
             id: raw.id,
             name: raw.name,
@@ -633,6 +657,7 @@ impl From<ProfileDe> for Profile {
             device_models: raw.device_models,
             bindings,
             model_bindings,
+            hypershift,
             stick_mode: raw.stick_mode,
             lighting: raw.lighting,
             setup_note: raw.setup_note,

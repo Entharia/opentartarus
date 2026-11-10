@@ -4,13 +4,19 @@ use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Program, Stroke, Text};
 use iced::{alignment, Point, Rectangle, Renderer, Size, Theme};
 use opentartarus_core::labels::{bind_label, v2_pro_key_number, V2_PRO_ROWS};
-use opentartarus_core::types::{Action, DeviceModel, KeyId};
+use opentartarus_core::types::{Action, DeviceModel, KeyId, Layer};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct Keypad {
     pub model: Option<DeviceModel>,
     pub bindings: BTreeMap<KeyId, Action>,
+    /// Which layer `bindings` is. On the Hypershift layer the Hypershift key
+    /// is lit and cannot be picked.
+    pub layer: Layer,
+    /// What an empty key sends anyway: the normal bindings, while the
+    /// Hypershift layer is shown. Drawn faint. Empty on the normal layer.
+    pub fallback: BTreeMap<KeyId, Action>,
     pub selected: Option<KeyId>,
     pub faded: bool,
     pub hovered: Option<KeyId>,
@@ -40,6 +46,7 @@ fn face_glyph(id: KeyId) -> Option<&'static str> {
         KeyId::ThumbSw => Some("\u{2199}"),
         KeyId::ThumbNw => Some("\u{2196}"),
         KeyId::StickClick => Some(theme::STICK_CLICK_GLYPH),
+        KeyId::Hypershift => Some(theme::HYPERSHIFT_GLYPH),
         _ => None,
     }
 }
@@ -123,12 +130,15 @@ impl Program<Message> for Keypad {
 
         for (id, rect) in key_rects(bounds.size(), self.model) {
             let binding = self.bindings.get(&id);
+            let held_layer_key = self.layer == Layer::Hypershift && id == KeyId::Hypershift;
             let path = Path::rounded_rectangle(
                 rect.position(),
                 rect.size(),
                 iced::border::Radius::from(corner_for(id, self.model)),
             );
-            let fill = if self.hovered == Some(id) {
+            let fill = if held_layer_key {
+                accent_soft
+            } else if self.hovered == Some(id) {
                 hover_fill
             } else if binding.is_some() {
                 bound_fill
@@ -180,10 +190,13 @@ impl Program<Message> for Keypad {
                 });
             }
             let label = bind_label(binding);
-            let (content, color) = if label.is_empty() {
-                (face_glyph(id).unwrap_or_default().to_string(), faint_color)
-            } else {
+            let fallback = bind_label(self.fallback.get(&id));
+            let (content, color) = if !label.is_empty() {
                 (label, text_color)
+            } else if !fallback.is_empty() && !held_layer_key {
+                (fallback, faint_color)
+            } else {
+                (face_glyph(id).unwrap_or_default().to_string(), faint_color)
             };
             if !content.is_empty() {
                 frame.fill_text(Text {
@@ -210,7 +223,7 @@ impl Program<Message> for Keypad {
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(local) = cursor.position_in(bounds) {
-                    if let Some(id) = hit_test(local, bounds.size(), self.model) {
+                    if let Some(id) = self.pickable(hit_test(local, bounds.size(), self.model)) {
                         return (iced::event::Status::Captured, Some(Message::SelectKey(id)));
                     }
                 }
@@ -219,7 +232,7 @@ impl Program<Message> for Keypad {
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let under = cursor
                     .position_in(bounds)
-                    .and_then(|local| hit_test(local, bounds.size(), self.model));
+                    .and_then(|local| self.pickable(hit_test(local, bounds.size(), self.model)));
                 if under == self.hovered {
                     // Do not flood the runtime with no-change hover messages.
                     return (iced::event::Status::Ignored, None);
@@ -237,11 +250,22 @@ impl Program<Message> for Keypad {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         if let Some(local) = cursor.position_in(bounds) {
-            if hit_test(local, bounds.size(), self.model).is_some() {
+            if self
+                .pickable(hit_test(local, bounds.size(), self.model))
+                .is_some()
+            {
                 return mouse::Interaction::Pointer;
             }
         }
         mouse::Interaction::default()
+    }
+}
+
+impl Keypad {
+    /// `id`, unless it is the Hypershift key on the Hypershift layer, where
+    /// it is the key holding the layer open and has no binding of its own.
+    fn pickable(&self, id: Option<KeyId>) -> Option<KeyId> {
+        id.filter(|id| !(self.layer == Layer::Hypershift && *id == KeyId::Hypershift))
     }
 }
 
@@ -366,7 +390,8 @@ fn fit_natural(size: Size, natural_width: f32, natural_height: f32) -> (f32, f32
 
 /// The V2 Pro: five rows of 6, 6, 6, 5 and 4 keys, and under them the
 /// thumbstick as a 3x3 grid with its four directions on the edges and its
-/// click in the middle. It has no wheel column.
+/// click in the middle, with the Hypershift key to its left. It has no
+/// wheel column.
 /// Widest row in key units: a double key plus five singles, or two doubles
 /// plus three singles.
 const V2_PRO_WIDEST_ROW: f32 = 7.0;
@@ -428,6 +453,12 @@ fn v2_pro_rects(size: Size) -> Vec<(KeyId, Rectangle)> {
         let cell_y = stick_top + row as f32 * (DPAD_CELL_HEIGHT + DPAD_GAP);
         out.push((id, place(cell_x, cell_y, DPAD_CELL_WIDTH, DPAD_CELL_HEIGHT)));
     }
+    let hypershift_left = stick_left - THUMB_CLUSTER_GAP - KEY_WIDTH;
+    let hypershift_top = stick_top + (DPAD_HEIGHT - KEY_HEIGHT) / HALF;
+    out.push((
+        KeyId::Hypershift,
+        place(hypershift_left, hypershift_top, KEY_WIDTH, KEY_HEIGHT),
+    ));
     out
 }
 
@@ -600,7 +631,11 @@ mod tests {
     #[test]
     fn v2_pro_draws_27_keys_and_the_stick_without_a_wheel() {
         let got = ids(BIG, Some(DeviceModel::V2Pro));
-        assert_eq!(got.len(), 32, "27 face keys + 4 stick directions + click");
+        assert_eq!(
+            got.len(),
+            33,
+            "27 face keys + 4 stick directions + click + Hypershift"
+        );
         let mut sorted = got.clone();
         sorted.sort();
         sorted.dedup();
@@ -641,12 +676,16 @@ mod tests {
             }
             let lowest_key = rects
                 .iter()
-                .filter(|(id, _)| !id.is_stick())
+                .filter(|(id, _)| !id.is_stick() && *id != KeyId::Hypershift)
                 .map(|(_, r)| r.y + r.height)
                 .fold(f32::MIN, f32::max);
             assert!(
                 y_of(KeyId::AnalogUp) >= lowest_key,
                 "stick sits below the keys"
+            );
+            assert!(
+                y_of(KeyId::Hypershift) >= lowest_key,
+                "Hypershift sits beside the stick, below the keys"
             );
         }
     }
