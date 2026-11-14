@@ -169,6 +169,8 @@ pub enum Message {
     AnimationTick(std::time::Instant),
     /// The window gained or lost focus.
     WindowFocus(bool),
+    /// Turns the lighting tab's animated preview on or off.
+    AnimatePreview(bool),
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -272,9 +274,12 @@ pub struct App {
     pub preset_shelf: PresetShelf,
     /// The lighting presets the user saved, shared by every profile.
     pub saved_presets: Vec<SavedPreset>,
-    /// Where saved presets are written. `None` keeps them in memory only,
-    /// as tests do.
-    pub saved_presets_paths: Option<Paths>,
+    /// Where saved presets and the window's settings are written. `None`
+    /// keeps them in memory only, as tests do.
+    pub config_paths: Option<Paths>,
+    /// Whether the lighting tab animates its picture of the pad. Off, it
+    /// shows the still frame; the pad itself animates either way.
+    pub animate_preview: bool,
     /// `Some` while the name box for saving a preset is open.
     pub save_preset_name: Option<String>,
     /// What is typed in the hex box, while it differs from the colour.
@@ -338,7 +343,8 @@ impl Default for App {
             paint_mode: PaintMode::Row,
             preset_shelf: PresetShelf::Group(PresetGroup::WorldOfWarcraft),
             saved_presets: Vec::new(),
-            saved_presets_paths: None,
+            config_paths: None,
+            animate_preview: true,
             save_preset_name: None,
             hex_draft: None,
             copied_hex: None,
@@ -847,6 +853,18 @@ impl App {
                 }
                 Task::none()
             }
+            Message::AnimatePreview(on) => {
+                self.animate_preview = on;
+                if let Some(paths) = &self.config_paths {
+                    let settings = store::UiSettings {
+                        animate_preview: on,
+                    };
+                    if store::write_ui_settings(paths, &settings).is_err() {
+                        self.last_error = Some(ErrorCode::Io.user_message().to_string());
+                    }
+                }
+                Task::none()
+            }
             Message::WindowFocus(focused) => {
                 self.window_focused = focused;
                 Task::none()
@@ -1185,14 +1203,15 @@ impl App {
         let paths = Paths::from_env();
         let app = Self {
             saved_presets: store::read_saved_presets(&paths),
-            saved_presets_paths: Some(paths),
+            animate_preview: store::read_ui_settings(&paths).animate_preview,
+            config_paths: Some(paths),
             ..Self::default()
         };
         (app, Task::none())
     }
 
     fn write_saved_presets(&mut self) {
-        if let Some(paths) = &self.saved_presets_paths {
+        if let Some(paths) = &self.config_paths {
             if store::write_saved_presets(paths, &self.saved_presets).is_err() {
                 self.last_error = Some(ErrorCode::Io.user_message().to_string());
             }
@@ -1235,6 +1254,7 @@ impl App {
         self.tab == Tab::Lighting
             && !self.hidden
             && self.window_focused
+            && self.animate_preview
             && self.lighting.effect == LightingEffect::Custom
             && self.lighting.animation.is_some()
     }
@@ -2223,6 +2243,9 @@ mod tests {
         assert!(!app.previews_animation());
         let _ = app.update(Message::LightingAnimation(Some(AnimationKind::Rain)));
         assert!(app.previews_animation());
+        let _ = app.update(Message::AnimatePreview(false));
+        assert!(!app.previews_animation(), "turned off by the user");
+        let _ = app.update(Message::AnimatePreview(true));
         let _ = app.update(Message::WindowFocus(false));
         assert!(!app.previews_animation(), "paused while a game has focus");
         let _ = app.update(Message::WindowFocus(true));

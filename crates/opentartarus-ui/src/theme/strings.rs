@@ -42,6 +42,7 @@ pub const LABEL_PRESETS: &str = "Presets";
 pub const LABEL_ANIMATION: &str = "Animation";
 pub const LABEL_SPEED: &str = "Speed";
 pub const ANIMATION_NONE: &str = "still";
+pub const ANIMATE_PREVIEW_LABEL: &str = "Animate the picture here";
 pub const ANIMATION_PRESS_HINT: &str = "Reacts to the keys you press on the pad.";
 pub const HEX_PLACEHOLDER: &str = "Hex, e.g. #FF7C0A";
 pub const COPIED_PREFIX: &str = "Copied ";

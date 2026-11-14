@@ -3,12 +3,12 @@ use crate::keys::COMBO_INPUT_ID;
 use crate::theme;
 use crate::view::widgets::{
     chip, danger_text_button, menu_style, pick_list_style, primary_button, quiet_button,
-    section_label, surface_container,
+    section_label, surface_container, switch_track,
 };
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, Space,
 };
-use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Background, Border, Element, Length, Theme};
 use opentartarus_core::constants::{STICK_ROTATION_MAX_DEG, STICK_ROTATION_STEP_DEG};
 use opentartarus_core::labels::{bind_label, key_display_name_for, key_position_text_for};
 use opentartarus_core::types::{
@@ -220,24 +220,7 @@ fn readout<'a>(action: Option<&Action>, profiles: &[ProfileRow]) -> Element<'a, 
 }
 
 fn switch<'a>(state: HoldRepeat) -> Element<'a, Message> {
-    let fill = if state.on {
-        theme::COLOR_ACCENT
-    } else {
-        theme::COLOR_RAISED
-    };
-    let track = container(Space::new(
-        Length::Fixed(theme::SWITCH_WIDTH),
-        Length::Fixed(theme::SWITCH_HEIGHT),
-    ))
-    .style(move |_theme: &Theme| container::Style {
-        background: Some(Background::Color(fill)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: theme::BORDER_NONE,
-            radius: theme::RADIUS_PILL.into(),
-        },
-        ..container::Style::default()
-    });
+    let track = switch_track(state.on);
 
     let label_color = if state.enabled {
         theme::COLOR_TEXT

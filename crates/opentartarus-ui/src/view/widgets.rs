@@ -399,6 +399,30 @@ pub fn dot<'a>(color: Color) -> Element<'a, Message> {
 }
 
 /// A colour chip: the profile swatch, the lighting presets.
+/// An on/off switch: a pill, accent-filled when on. The caller wraps it in
+/// a button and decides what a press does.
+pub fn switch_track<'a>(on: bool) -> Element<'a, Message> {
+    let fill = if on {
+        theme::COLOR_ACCENT
+    } else {
+        theme::COLOR_RAISED
+    };
+    container(Space::new(
+        Length::Fixed(theme::SWITCH_WIDTH),
+        Length::Fixed(theme::SWITCH_HEIGHT),
+    ))
+    .style(move |_theme: &Theme| container::Style {
+        background: Some(Background::Color(fill)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: theme::BORDER_NONE,
+            radius: theme::RADIUS_PILL.into(),
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
 pub fn swatch<'a>(rgb: [u8; 3], size: f32) -> Element<'a, Message> {
     let color = Color::from_rgb8(rgb[0], rgb[1], rgb[2]);
     container(Space::new(Length::Fixed(size), Length::Fixed(size)))

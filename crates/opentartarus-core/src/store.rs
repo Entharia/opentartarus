@@ -197,6 +197,40 @@ pub fn read_stick_rotation(paths: &Paths) -> i32 {
         .unwrap_or(0)
 }
 
+/// Settings that only the window reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiSettings {
+    /// Whether the lighting tab animates its picture of the pad.
+    #[serde(default = "yes")]
+    pub animate_preview: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            animate_preview: true,
+        }
+    }
+}
+
+/// The window's settings, or the defaults if the file is missing or broken.
+pub fn read_ui_settings(paths: &Paths) -> UiSettings {
+    fs::read(&paths.ui_settings_file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_ui_settings(paths: &Paths, settings: &UiSettings) -> Result<(), ErrorCode> {
+    fs::create_dir_all(&paths.config_dir).map_err(|_| ErrorCode::Io)?;
+    let json = serde_json::to_vec_pretty(settings).map_err(|_| ErrorCode::Io)?;
+    fs::write(&paths.ui_settings_file, json).map_err(|_| ErrorCode::Io)
+}
+
 /// The user's saved lighting presets, in the order they were made. A missing
 /// or unreadable file reads as none, and broken entries are skipped.
 pub fn read_saved_presets(paths: &Paths) -> Vec<SavedPreset> {
@@ -273,6 +307,22 @@ mod tests {
       "bindings": {},
       "lighting": { "effect": "none", "brightness": 80 }
     }"#;
+
+    #[test]
+    fn ui_settings_default_to_animating_and_round_trip() {
+        let paths = tmp_paths();
+        assert!(
+            read_ui_settings(&paths).animate_preview,
+            "on until turned off"
+        );
+        let off = UiSettings {
+            animate_preview: false,
+        };
+        write_ui_settings(&paths, &off).unwrap();
+        assert_eq!(read_ui_settings(&paths), off);
+        fs::write(&paths.ui_settings_file, b"{}").unwrap();
+        assert!(read_ui_settings(&paths).animate_preview);
+    }
 
     #[test]
     fn saved_presets_round_trip_and_broken_ones_are_dropped() {

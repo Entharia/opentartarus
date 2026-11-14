@@ -4,7 +4,7 @@ use crate::light_pad::{self, LightPad};
 use crate::theme;
 use crate::view::widgets::{
     accent_text_button, card_container, danger_text_button, dot, quiet_button, row_button,
-    section_label, selected_effect_button, selected_row_button, swatch,
+    section_label, selected_effect_button, selected_row_button, swatch, switch_track,
 };
 use iced::widget::{button, column, container, row, scrollable, slider, text, text_input, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
@@ -107,7 +107,7 @@ pub fn preview_frame(app: &App) -> LightFrame {
     match lighting.effect {
         LightingEffect::Custom => {
             let frame = lighting.frame.clone().unwrap_or_default();
-            match lighting.animation {
+            match lighting.animation.filter(|_| app.animate_preview) {
                 Some(animation) => render(
                     &frame,
                     animation,
@@ -275,6 +275,19 @@ fn animation_control(app: &App) -> Element<'_, Message> {
             );
         }
         section = section
+            .push(
+                row![
+                    text(theme::ANIMATE_PREVIEW_LABEL)
+                        .size(theme::TEXT_SMALL)
+                        .color(theme::COLOR_TEXT_DIM),
+                    Space::with_width(Length::Fill),
+                    button(switch_track(app.animate_preview))
+                        .padding(0)
+                        .on_press(Message::AnimatePreview(!app.animate_preview))
+                        .style(quiet_button),
+                ]
+                .align_y(Alignment::Center),
+            )
             .push(labelled(
                 theme::LABEL_SPEED.to_string(),
                 format!("{} / {}", animation.speed, SPEED_MAX),

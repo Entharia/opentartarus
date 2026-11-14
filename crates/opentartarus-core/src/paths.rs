@@ -9,6 +9,8 @@ pub struct Paths {
     pub state_file: PathBuf,
     /// The lighting presets the user saved, shared by every profile.
     pub light_presets_file: PathBuf,
+    /// The window's own settings, kept apart from the daemon's state file.
+    pub ui_settings_file: PathBuf,
     pub socket: PathBuf,
     pub log_file: PathBuf,
 }
@@ -20,6 +22,7 @@ impl Paths {
             profiles_dir: config_dir.join("profiles"),
             state_file: config_dir.join("state.json"),
             light_presets_file: config_dir.join("light_presets.json"),
+            ui_settings_file: config_dir.join("ui.json"),
             socket: runtime_or_cache.join(APP_NAME).join("daemon.sock"),
             log_file: state.join(APP_NAME).join("opentartarus.log"),
             config_dir,
