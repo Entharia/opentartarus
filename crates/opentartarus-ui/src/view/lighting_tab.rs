@@ -1,11 +1,12 @@
-use crate::app::{uses_color, App, EffectChoice, Message, Phase};
+use crate::app::{uses_color, App, EffectChoice, Message, Phase, PresetShelf};
+use crate::keys::SAVE_PRESET_INPUT_ID;
 use crate::light_pad::{self, LightPad};
 use crate::theme;
 use crate::view::widgets::{
-    card_container, dot, quiet_button, row_button, section_label, selected_effect_button,
-    selected_row_button, swatch,
+    accent_text_button, card_container, danger_text_button, dot, quiet_button, row_button,
+    section_label, selected_effect_button, selected_row_button, swatch,
 };
-use iced::widget::{button, column, container, row, scrollable, slider, text, Space};
+use iced::widget::{button, column, container, row, scrollable, slider, text, text_input, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use opentartarus_core::light_presets::{
     preset_by_id, preset_for_frame, LightPreset, PresetGroup, PRESETS,
@@ -343,69 +344,170 @@ pub fn lighting_tab(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-fn group_label(group: PresetGroup) -> &'static str {
-    match group {
-        PresetGroup::WorldOfWarcraft => theme::PRESET_GROUP_WOW,
-        PresetGroup::Games => theme::PRESET_GROUP_GAMES,
-        PresetGroup::Aesthetic => theme::PRESET_GROUP_AESTHETIC,
-        PresetGroup::Functional => theme::PRESET_GROUP_FUNCTIONAL,
+/// Every shelf the side panel offers: the shipped groups, then the user's.
+const SHELVES: [PresetShelf; 5] = [
+    PresetShelf::Group(PresetGroup::WorldOfWarcraft),
+    PresetShelf::Group(PresetGroup::Games),
+    PresetShelf::Group(PresetGroup::Aesthetic),
+    PresetShelf::Group(PresetGroup::Functional),
+    PresetShelf::Saved,
+];
+const SHELF_CHIPS_PER_ROW: usize = 3;
+
+fn shelf_label(shelf: PresetShelf) -> &'static str {
+    match shelf {
+        PresetShelf::Group(PresetGroup::WorldOfWarcraft) => theme::PRESET_GROUP_WOW,
+        PresetShelf::Group(PresetGroup::Games) => theme::PRESET_GROUP_GAMES,
+        PresetShelf::Group(PresetGroup::Aesthetic) => theme::PRESET_GROUP_AESTHETIC,
+        PresetShelf::Group(PresetGroup::Functional) => theme::PRESET_GROUP_FUNCTIONAL,
+        PresetShelf::Saved => theme::PRESET_SHELF_SAVED,
     }
 }
 
-fn group_caption(group: PresetGroup) -> &'static str {
-    match group {
-        PresetGroup::WorldOfWarcraft => theme::PRESET_CAPTION_WOW,
-        PresetGroup::Games => theme::PRESET_CAPTION_GAMES,
-        PresetGroup::Aesthetic => theme::PRESET_CAPTION_AESTHETIC,
-        PresetGroup::Functional => theme::PRESET_CAPTION_FUNCTIONAL,
+fn shelf_caption(shelf: PresetShelf) -> &'static str {
+    match shelf {
+        PresetShelf::Group(PresetGroup::WorldOfWarcraft) => theme::PRESET_CAPTION_WOW,
+        PresetShelf::Group(PresetGroup::Games) => theme::PRESET_CAPTION_GAMES,
+        PresetShelf::Group(PresetGroup::Aesthetic) => theme::PRESET_CAPTION_AESTHETIC,
+        PresetShelf::Group(PresetGroup::Functional) => theme::PRESET_CAPTION_FUNCTIONAL,
+        PresetShelf::Saved => theme::PRESET_CAPTION_SAVED,
     }
 }
 
-fn group_chips(app: &App) -> Element<'_, Message> {
+fn shelf_chips(app: &App) -> Element<'_, Message> {
     let mut grid = column![].spacing(theme::SPACE_XS);
-    for pair in PresetGroup::ALL.chunks(2) {
+    for chunk in SHELVES.chunks(SHELF_CHIPS_PER_ROW) {
         let mut line = row![].spacing(theme::SPACE_XS);
-        for group in pair {
-            let style = if app.preset_group == *group {
+        for shelf in chunk {
+            let style = if app.preset_shelf == *shelf {
                 selected_effect_button
             } else {
                 quiet_button
             };
             line = line.push(
                 button(
-                    container(text(group_label(*group)).size(theme::TEXT_SMALL))
+                    container(text(shelf_label(*shelf)).size(theme::TEXT_SMALL))
                         .center_x(Length::Fill),
                 )
                 .width(Length::Fill)
                 .padding([theme::SPACE_XS, theme::SPACE_SM])
-                .on_press(Message::PresetGroupPick(*group))
+                .on_press(Message::PresetShelfPick(*shelf))
                 .style(style),
             );
+        }
+        for _ in chunk.len()..SHELF_CHIPS_PER_ROW {
+            line = line.push(Space::with_width(Length::Fill));
         }
         grid = grid.push(line);
     }
     grid.into()
 }
 
-fn preset_row(preset: &'static LightPreset, selected: bool) -> Element<'static, Message> {
+fn preset_button<'a>(
+    frame: &LightFrame,
+    name: &'a str,
+    selected: bool,
+    message: Message,
+) -> iced::widget::Button<'a, Message> {
     let style = if selected {
         selected_row_button
     } else {
         row_button
     };
     button(
-        row![
-            frame_thumbnail(&preset.frame()),
-            text(preset.name).size(theme::TEXT_BODY),
-        ]
-        .spacing(theme::SPACE_MD)
-        .align_y(Alignment::Center),
+        row![frame_thumbnail(frame), text(name).size(theme::TEXT_BODY)]
+            .spacing(theme::SPACE_MD)
+            .align_y(Alignment::Center),
     )
     .width(Length::Fill)
     .padding([theme::SPACE_SM, theme::SPACE_SM])
-    .on_press(Message::LightFramePreset(preset.id))
+    .on_press(message)
     .style(style)
-    .into()
+}
+
+fn shipped_list(app: &App, group: PresetGroup) -> Element<'_, Message> {
+    let current = current_frame(app).and_then(preset_for_frame);
+    let mut list = column![].spacing(theme::SPACE_XXS);
+    for preset in PRESETS.iter().filter(|p| p.group == group) {
+        let selected = current.is_some_and(|c| c.id == preset.id);
+        list = list.push(preset_button(
+            &preset.frame(),
+            preset.name,
+            selected,
+            Message::LightFramePreset(preset.id),
+        ));
+    }
+    list.into()
+}
+
+fn saved_list(app: &App) -> Element<'_, Message> {
+    if app.saved_presets.is_empty() {
+        return text(theme::PRESETS_SAVED_EMPTY)
+            .size(theme::TEXT_SMALL)
+            .color(theme::COLOR_TEXT_DIM)
+            .into();
+    }
+    let current = current_frame(app);
+    let mut list = column![].spacing(theme::SPACE_XXS);
+    for (index, preset) in app.saved_presets.iter().enumerate() {
+        let selected = current == Some(&preset.frame);
+        list = list.push(
+            row![
+                preset_button(
+                    &preset.frame,
+                    &preset.name,
+                    selected,
+                    Message::LightSavedPreset(index),
+                ),
+                button(text(theme::BUTTON_DELETE_PRESET).size(theme::TEXT_BODY))
+                    .padding([theme::SPACE_XXS, theme::SPACE_SM])
+                    .on_press(Message::DeleteSavedPreset(index))
+                    .style(danger_text_button),
+            ]
+            .spacing(theme::SPACE_XXS)
+            .align_y(Alignment::Center),
+        );
+    }
+    list.into()
+}
+
+/// `+ Save these colours` under the list, or the name box once pressed.
+/// Enter saves, Escape or the `x` cancels. Only a custom frame can be saved.
+fn save_control(app: &App) -> Option<Element<'_, Message>> {
+    if app.lighting.effect != LightingEffect::Custom {
+        return None;
+    }
+    Some(match &app.save_preset_name {
+        None => button(text(theme::BUTTON_SAVE_PRESET).size(theme::TEXT_BODY))
+            .width(Length::Fill)
+            .padding([theme::SPACE_XS, theme::SPACE_MD])
+            .on_press(Message::StartSavePreset)
+            .style(accent_text_button)
+            .into(),
+        Some(name) => row![
+            text_input(theme::SAVE_PRESET_PLACEHOLDER, name)
+                .id(text_input::Id::new(SAVE_PRESET_INPUT_ID))
+                .size(theme::TEXT_BODY)
+                .on_input(Message::SavePresetNameChanged)
+                .on_submit(Message::SubmitSavePreset),
+            button(text(theme::BUTTON_CANCEL_SAVE_PRESET).size(theme::TEXT_BODY))
+                .padding([theme::SPACE_XXS, theme::SPACE_SM])
+                .on_press(Message::CancelSavePreset)
+                .style(danger_text_button),
+        ]
+        .spacing(theme::SPACE_XXS)
+        .align_y(Alignment::Center)
+        .into(),
+    })
+}
+
+/// The frame on the pad right now, if it is a custom one.
+fn current_frame(app: &App) -> Option<&LightFrame> {
+    if app.lighting.effect == LightingEffect::Custom {
+        app.lighting.frame.as_ref()
+    } else {
+        None
+    }
 }
 
 /// The right-hand panel on the lighting tab: presets, one group at a time.
@@ -421,24 +523,24 @@ pub fn presets_panel(app: &App) -> Element<'_, Message> {
         .spacing(theme::SPACE_SM)
         .into();
     }
-    let current = app.lighting.frame.as_ref().and_then(preset_for_frame);
-    let mut list = column![].spacing(theme::SPACE_XXS);
-    for preset in PRESETS.iter().filter(|p| p.group == app.preset_group) {
-        let selected = app.lighting.effect == LightingEffect::Custom
-            && current.is_some_and(|c| c.id == preset.id);
-        list = list.push(preset_row(preset, selected));
-    }
-    column![
+    let list = match app.preset_shelf {
+        PresetShelf::Group(group) => shipped_list(app, group),
+        PresetShelf::Saved => saved_list(app),
+    };
+    let mut panel = column![
         title,
-        group_chips(app),
-        text(group_caption(app.preset_group))
+        shelf_chips(app),
+        text(shelf_caption(app.preset_shelf))
             .size(theme::TEXT_SMALL)
             .color(theme::COLOR_TEXT_FAINT),
         scrollable(container(list).padding(iced::Padding::ZERO.right(theme::SPACE_MD)))
             .height(Length::Fill),
     ]
-    .spacing(theme::SPACE_MD)
-    .into()
+    .spacing(theme::SPACE_MD);
+    if let Some(save) = save_control(app) {
+        panel = panel.push(save);
+    }
+    panel.into()
 }
 
 #[cfg(test)]

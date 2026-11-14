@@ -1,7 +1,8 @@
 use crate::client::{self, FixPermissionsOutcome, Outgoing};
 use crate::keys::{
-    capture_window_key, is_combo_id, is_new_profile_id, query_focused_id, submit_record_key_params,
-    submit_record_mouse_params, KeyCapture, NEW_PROFILE_INPUT_ID,
+    capture_window_key, is_combo_id, is_new_profile_id, is_save_preset_id, query_focused_id,
+    submit_record_key_params, submit_record_mouse_params, KeyCapture, NEW_PROFILE_INPUT_ID,
+    SAVE_PRESET_INPUT_ID,
 };
 use crate::theme;
 use iced::advanced::widget::Id;
@@ -18,7 +19,9 @@ use opentartarus_core::constants::{
 };
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::{EventMethod, Method, WireError};
-use opentartarus_core::light_presets::{preset_by_id, PresetGroup};
+use opentartarus_core::light_presets::{
+    preset_by_id, saved_name, with_saved, PresetGroup, SavedPreset,
+};
 use opentartarus_core::lighting::{fill_row, solid_frame, FRAME_ROWS, HOME_ROW};
 use opentartarus_core::pack;
 use opentartarus_core::paths::Paths;
@@ -137,8 +140,16 @@ pub enum Message {
     LightingRow(usize),
     /// Replaces the custom frame with a preset's, by preset id.
     LightFramePreset(&'static str),
-    /// Shows one group of presets in the lighting tab's side panel.
-    PresetGroupPick(PresetGroup),
+    /// Shows one shelf of presets in the lighting tab's side panel.
+    PresetShelfPick(PresetShelf),
+    /// Opens the name box for saving the current frame as a preset.
+    StartSavePreset,
+    SavePresetNameChanged(String),
+    SubmitSavePreset,
+    CancelSavePreset,
+    /// Applies one of the user's saved presets, by its place in the list.
+    LightSavedPreset(usize),
+    DeleteSavedPreset(usize),
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -235,8 +246,15 @@ pub struct App {
     pub lighting_saved: bool,
     /// The row of a custom frame that the colour controls edit.
     pub lighting_row: usize,
-    /// The preset group the lighting tab's side panel lists.
-    pub preset_group: PresetGroup,
+    /// The presets the lighting tab's side panel lists.
+    pub preset_shelf: PresetShelf,
+    /// The lighting presets the user saved, shared by every profile.
+    pub saved_presets: Vec<SavedPreset>,
+    /// Where saved presets are written. `None` keeps them in memory only,
+    /// as tests do.
+    pub saved_presets_paths: Option<Paths>,
+    /// `Some` while the name box for saving a preset is open.
+    pub save_preset_name: Option<String>,
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
@@ -284,7 +302,10 @@ impl Default for App {
             hovered_key: None,
             lighting_saved: false,
             lighting_row: HOME_ROW,
-            preset_group: PresetGroup::WorldOfWarcraft,
+            preset_shelf: PresetShelf::Group(PresetGroup::WorldOfWarcraft),
+            saved_presets: Vec::new(),
+            saved_presets_paths: None,
+            save_preset_name: None,
             new_profile_name: None,
             stick_mode: StickMode::default(),
             stick_rotation_deg: 0,
@@ -437,6 +458,12 @@ impl App {
                 if is_new_profile_id(focused.as_ref()) {
                     if matches!(key, Key::Named(Named::Escape)) {
                         self.new_profile_name = None;
+                    }
+                    return Task::none();
+                }
+                if is_save_preset_id(focused.as_ref()) {
+                    if matches!(key, Key::Named(Named::Escape)) {
+                        self.save_preset_name = None;
                     }
                     return Task::none();
                 }
@@ -665,8 +692,55 @@ impl App {
                 }
                 Task::none()
             }
-            Message::PresetGroupPick(group) => {
-                self.preset_group = group;
+            Message::PresetShelfPick(shelf) => {
+                self.preset_shelf = shelf;
+                Task::none()
+            }
+            Message::StartSavePreset => {
+                if self.lighting.effect != LightingEffect::Custom {
+                    return Task::none();
+                }
+                self.preset_shelf = PresetShelf::Saved;
+                self.save_preset_name = Some(String::new());
+                text_input::focus(text_input::Id::new(SAVE_PRESET_INPUT_ID))
+            }
+            Message::SavePresetNameChanged(text) => {
+                if self.save_preset_name.is_some() {
+                    self.save_preset_name = Some(text);
+                }
+                Task::none()
+            }
+            Message::SubmitSavePreset => {
+                // A blank name keeps the box open, as the new-profile box does.
+                let name = self.save_preset_name.as_deref().and_then(saved_name);
+                let (Some(name), Some(frame)) = (name, self.lighting.frame.clone()) else {
+                    return Task::none();
+                };
+                let preset = SavedPreset { name, frame };
+                let presets = std::mem::take(&mut self.saved_presets);
+                self.saved_presets = with_saved(presets, preset);
+                self.save_preset_name = None;
+                self.write_saved_presets();
+                Task::none()
+            }
+            Message::CancelSavePreset => {
+                self.save_preset_name = None;
+                Task::none()
+            }
+            Message::LightSavedPreset(index) => {
+                if let Some(preset) = self.saved_presets.get(index) {
+                    self.lighting.effect = LightingEffect::Custom;
+                    self.lighting.frame = Some(preset.frame.clone());
+                    self.send_lighting();
+                    self.lighting_saved = true;
+                }
+                Task::none()
+            }
+            Message::DeleteSavedPreset(index) => {
+                if index < self.saved_presets.len() {
+                    self.saved_presets.remove(index);
+                    self.write_saved_presets();
+                }
                 Task::none()
             }
             Message::LightFramePreset(id) => {
@@ -982,6 +1056,26 @@ impl App {
                     "action": action,
                 }),
             );
+        }
+    }
+
+    /// The window's starting state: the default, plus the saved presets
+    /// read from disk.
+    pub fn boot() -> (Self, Task<Message>) {
+        let paths = Paths::from_env();
+        let app = Self {
+            saved_presets: store::read_saved_presets(&paths),
+            saved_presets_paths: Some(paths),
+            ..Self::default()
+        };
+        (app, Task::none())
+    }
+
+    fn write_saved_presets(&mut self) {
+        if let Some(paths) = &self.saved_presets_paths {
+            if store::write_saved_presets(paths, &self.saved_presets).is_err() {
+                self.last_error = Some(ErrorCode::Io.user_message().to_string());
+            }
         }
     }
 
@@ -1325,6 +1419,14 @@ pub fn effect_name(effect: LightingEffect) -> &'static str {
         LightingEffect::None => "none",
         LightingEffect::Custom => "custom",
     }
+}
+
+/// What the lighting tab's side panel lists: one group of shipped presets,
+/// or the user's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetShelf {
+    Group(PresetGroup),
+    Saved,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1777,6 +1879,54 @@ mod tests {
         assert_eq!(app.lighting.frame, Some(paladin.frame()));
         let _ = app.update(Message::LightFramePreset("no-such-preset"));
         assert_eq!(app.lighting.frame, Some(paladin.frame()));
+    }
+
+    #[test]
+    fn saving_a_preset_names_the_current_frame_and_lists_it_under_mine() {
+        let mut app = App::default();
+        let _ = app.update(Message::StartSavePreset);
+        assert_eq!(app.save_preset_name, None, "only a custom frame saves");
+
+        let _ = app.update(Message::LightFramePreset("ocean"));
+        let ocean = app.lighting.frame.clone().unwrap();
+        let _ = app.update(Message::StartSavePreset);
+        assert_eq!(app.preset_shelf, PresetShelf::Saved);
+        assert_eq!(app.save_preset_name.as_deref(), Some(""));
+        let _ = app.update(Message::SubmitSavePreset);
+        assert_eq!(
+            app.save_preset_name.as_deref(),
+            Some(""),
+            "blank stays open"
+        );
+        let _ = app.update(Message::SavePresetNameChanged("  Calm  ".into()));
+        let _ = app.update(Message::SubmitSavePreset);
+        assert_eq!(app.save_preset_name, None);
+        assert_eq!(
+            app.saved_presets,
+            vec![SavedPreset {
+                name: "Calm".into(),
+                frame: ocean,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_saved_preset_applies_and_deletes_by_its_place() {
+        let mut app = App {
+            saved_presets: vec![SavedPreset {
+                name: "Mine".into(),
+                frame: solid_frame([4, 5, 6]),
+            }],
+            ..App::default()
+        };
+        let _ = app.update(Message::LightSavedPreset(0));
+        assert_eq!(app.lighting.effect, LightingEffect::Custom);
+        assert_eq!(app.lighting.frame, Some(solid_frame([4, 5, 6])));
+        assert!(app.lighting_saved);
+        let _ = app.update(Message::DeleteSavedPreset(3));
+        assert_eq!(app.saved_presets.len(), 1, "no such preset, nothing gone");
+        let _ = app.update(Message::DeleteSavedPreset(0));
+        assert!(app.saved_presets.is_empty());
     }
 
     #[test]

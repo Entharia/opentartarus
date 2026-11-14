@@ -51,7 +51,7 @@ pub fn run() -> iced::Result {
             ..iced::window::Settings::default()
         })
         .exit_on_close_request(false)
-        .run()
+        .run_with(App::boot)
 }
 
 #[cfg(test)]

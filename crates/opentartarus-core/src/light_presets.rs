@@ -4,6 +4,46 @@
 
 use crate::lighting::{FRAME_COLUMNS, FRAME_ROWS, HOME_ROW};
 use crate::types::LightFrame;
+use serde::{Deserialize, Serialize};
+
+/// Longest name a saved preset can have, in characters.
+pub const SAVED_NAME_MAX_LEN: usize = 32;
+
+/// A frame the user saved under a name of their own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedPreset {
+    pub name: String,
+    pub frame: LightFrame,
+}
+
+impl SavedPreset {
+    pub fn is_valid(&self) -> bool {
+        let name = self.name.trim();
+        !name.is_empty()
+            && name.chars().count() <= SAVED_NAME_MAX_LEN
+            && self.frame.len() <= FRAME_ROWS
+            && self.frame.iter().all(|row| row.len() <= FRAME_COLUMNS)
+    }
+}
+
+/// `name` tidied for a saved preset: trimmed, and cut to the length limit.
+/// `None` if nothing is left.
+pub fn saved_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().take(SAVED_NAME_MAX_LEN).collect();
+    let name = name.trim_end().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// `presets` with `preset` added. A preset of the same name, ignoring case,
+/// is replaced in place, so saving again under a name updates it.
+pub fn with_saved(mut presets: Vec<SavedPreset>, preset: SavedPreset) -> Vec<SavedPreset> {
+    let key = preset.name.to_lowercase();
+    match presets.iter_mut().find(|p| p.name.to_lowercase() == key) {
+        Some(existing) => *existing = preset,
+        None => presets.push(preset),
+    }
+    presets
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetGroup {
@@ -573,6 +613,52 @@ mod tests {
         assert!(frame[1][..5].iter().all(|c| *c == near));
         assert!(frame[3][..5].iter().all(|c| *c == near));
         assert!(frame[4][..4].iter().all(|c| *c == rgb(0xff6000)));
+    }
+
+    #[test]
+    fn saved_names_are_trimmed_cut_and_never_empty() {
+        assert_eq!(saved_name("  Raid night "), Some("Raid night".into()));
+        assert_eq!(saved_name("   "), None);
+        let long = "x".repeat(SAVED_NAME_MAX_LEN + 10);
+        assert_eq!(saved_name(&long).unwrap().len(), SAVED_NAME_MAX_LEN);
+    }
+
+    #[test]
+    fn saving_under_an_existing_name_replaces_it() {
+        let a = SavedPreset {
+            name: "Raid".into(),
+            frame: vec![vec![[1, 1, 1]]],
+        };
+        let b = SavedPreset {
+            name: "Arena".into(),
+            frame: vec![vec![[2, 2, 2]]],
+        };
+        let a2 = SavedPreset {
+            name: "raid".into(),
+            frame: vec![vec![[3, 3, 3]]],
+        };
+        let list = with_saved(with_saved(Vec::new(), a), b.clone());
+        let list = with_saved(list, a2.clone());
+        assert_eq!(list, vec![a2, b]);
+    }
+
+    #[test]
+    fn saved_presets_must_fit_the_grid_and_have_a_name() {
+        let ok = SavedPreset {
+            name: "Mine".into(),
+            frame: preset_by_id("ocean").unwrap().frame(),
+        };
+        assert!(ok.is_valid());
+        let unnamed = SavedPreset {
+            name: " ".into(),
+            ..ok.clone()
+        };
+        assert!(!unnamed.is_valid());
+        let too_wide = SavedPreset {
+            frame: vec![vec![[0, 0, 0]; FRAME_COLUMNS + 1]],
+            ..ok
+        };
+        assert!(!too_wide.is_valid());
     }
 
     #[test]

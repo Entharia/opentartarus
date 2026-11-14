@@ -48,6 +48,14 @@ pub const PRESET_GROUP_WOW: &str = "WoW";
 pub const PRESET_GROUP_GAMES: &str = "Games";
 pub const PRESET_GROUP_AESTHETIC: &str = "Aesthetic";
 pub const PRESET_GROUP_FUNCTIONAL: &str = "Functional";
+pub const PRESET_SHELF_SAVED: &str = "Mine";
+pub const PRESET_CAPTION_SAVED: &str = "Colours you saved, for every profile.";
+pub const PRESETS_SAVED_EMPTY: &str =
+    "Nothing saved yet. Colour the pad, then save it here to use it again.";
+pub const BUTTON_SAVE_PRESET: &str = "+ Save these colours";
+pub const SAVE_PRESET_PLACEHOLDER: &str = "Name these colours";
+pub const BUTTON_CANCEL_SAVE_PRESET: &str = "\u{00d7}";
+pub const BUTTON_DELETE_PRESET: &str = "\u{00d7}";
 pub const PRESET_CAPTION_WOW: &str = "Every class, a different colour on each row.";
 pub const PRESET_CAPTION_GAMES: &str = "A look for each game the app ships with.";
 pub const PRESET_CAPTION_AESTHETIC: &str = "Gradients, just for the look.";

@@ -1,4 +1,5 @@
 use crate::error::ErrorCode;
+use crate::light_presets::SavedPreset;
 use crate::paths::Paths;
 use crate::types::Profile;
 use serde::{Deserialize, Serialize};
@@ -196,6 +197,24 @@ pub fn read_stick_rotation(paths: &Paths) -> i32 {
         .unwrap_or(0)
 }
 
+/// The user's saved lighting presets, in the order they were made. A missing
+/// or unreadable file reads as none, and broken entries are skipped.
+pub fn read_saved_presets(paths: &Paths) -> Vec<SavedPreset> {
+    fs::read(&paths.light_presets_file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<SavedPreset>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(SavedPreset::is_valid)
+        .collect()
+}
+
+pub fn write_saved_presets(paths: &Paths, presets: &[SavedPreset]) -> Result<(), ErrorCode> {
+    fs::create_dir_all(&paths.config_dir).map_err(|_| ErrorCode::Io)?;
+    let json = serde_json::to_vec_pretty(presets).map_err(|_| ErrorCode::Io)?;
+    fs::write(&paths.light_presets_file, json).map_err(|_| ErrorCode::Io)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +273,24 @@ mod tests {
       "bindings": {},
       "lighting": { "effect": "none", "brightness": 80 }
     }"#;
+
+    #[test]
+    fn saved_presets_round_trip_and_broken_ones_are_dropped() {
+        let paths = tmp_paths();
+        assert!(read_saved_presets(&paths).is_empty(), "nothing saved yet");
+        let good = SavedPreset {
+            name: "Raid".into(),
+            frame: vec![vec![[1, 2, 3]; 6]; 5],
+        };
+        let broken = SavedPreset {
+            name: "".into(),
+            frame: Vec::new(),
+        };
+        write_saved_presets(&paths, &[good.clone(), broken]).unwrap();
+        assert_eq!(read_saved_presets(&paths), vec![good]);
+        fs::write(&paths.light_presets_file, b"not json").unwrap();
+        assert!(read_saved_presets(&paths).is_empty());
+    }
 
     #[test]
     fn listing_a_fresh_install_is_empty_not_an_error() {

@@ -70,6 +70,14 @@ pub fn is_new_profile_id(id: Option<&Id>) -> bool {
     id == Some(&new_profile_widget_id())
 }
 
+/// The name box for saving a lighting preset. Like the new-profile box,
+/// typing in it must never reach the combo capture.
+pub const SAVE_PRESET_INPUT_ID: &str = "save-preset-name";
+
+pub fn is_save_preset_id(id: Option<&Id>) -> bool {
+    id == Some(&Id::new(SAVE_PRESET_INPUT_ID))
+}
+
 pub fn focused_widget_id() -> impl Operation<Option<Id>> {
     struct FocusedId {
         focused: Option<Id>,

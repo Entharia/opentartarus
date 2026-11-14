@@ -7,6 +7,8 @@ pub struct Paths {
     pub config_dir: PathBuf,
     pub profiles_dir: PathBuf,
     pub state_file: PathBuf,
+    /// The lighting presets the user saved, shared by every profile.
+    pub light_presets_file: PathBuf,
     pub socket: PathBuf,
     pub log_file: PathBuf,
 }
@@ -17,6 +19,7 @@ impl Paths {
         Self {
             profiles_dir: config_dir.join("profiles"),
             state_file: config_dir.join("state.json"),
+            light_presets_file: config_dir.join("light_presets.json"),
             socket: runtime_or_cache.join(APP_NAME).join("daemon.sock"),
             log_file: state.join(APP_NAME).join("opentartarus.log"),
             config_dir,
