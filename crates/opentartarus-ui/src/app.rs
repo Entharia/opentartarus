@@ -167,6 +167,8 @@ pub enum Message {
     LightingSpeed(u8),
     /// Moves the lighting tab's animation preview on.
     AnimationTick(std::time::Instant),
+    /// The window gained or lost focus.
+    WindowFocus(bool),
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -282,6 +284,9 @@ pub struct App {
     /// When the animation preview started, and how far it has run.
     pub preview_origin: std::time::Instant,
     pub preview_time: f32,
+    /// Whether the window has focus. The preview pauses without it, so a
+    /// game in front costs nothing.
+    pub window_focused: bool,
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
@@ -339,6 +344,7 @@ impl Default for App {
             copied_hex: None,
             preview_origin: std::time::Instant::now(),
             preview_time: 0.0,
+            window_focused: true,
             new_profile_name: None,
             stick_mode: StickMode::default(),
             stick_rotation_deg: 0,
@@ -370,6 +376,8 @@ impl App {
                     Some(Message::ComboKey { key, modifiers })
                 }
                 Event::Mouse(mouse::Event::ButtonPressed(_)) => Some(Message::RefreshComboFocus),
+                Event::Window(window::Event::Focused) => Some(Message::WindowFocus(true)),
+                Event::Window(window::Event::Unfocused) => Some(Message::WindowFocus(false)),
                 _ => None,
             }),
         ])
@@ -839,6 +847,10 @@ impl App {
                 }
                 Task::none()
             }
+            Message::WindowFocus(focused) => {
+                self.window_focused = focused;
+                Task::none()
+            }
             Message::AnimationTick(now) => {
                 self.preview_time = now.duration_since(self.preview_origin).as_secs_f32();
                 Task::none()
@@ -1222,6 +1234,7 @@ impl App {
     pub fn previews_animation(&self) -> bool {
         self.tab == Tab::Lighting
             && !self.hidden
+            && self.window_focused
             && self.lighting.effect == LightingEffect::Custom
             && self.lighting.animation.is_some()
     }
@@ -2209,6 +2222,10 @@ mod tests {
         let _ = app.update(Message::LightFramePreset("ocean"));
         assert!(!app.previews_animation());
         let _ = app.update(Message::LightingAnimation(Some(AnimationKind::Rain)));
+        assert!(app.previews_animation());
+        let _ = app.update(Message::WindowFocus(false));
+        assert!(!app.previews_animation(), "paused while a game has focus");
+        let _ = app.update(Message::WindowFocus(true));
         assert!(app.previews_animation());
         app.tab = Tab::Keys;
         assert!(!app.previews_animation());
