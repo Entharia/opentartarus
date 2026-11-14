@@ -1,5 +1,5 @@
-use crate::app::{uses_color, App, EffectChoice, Message, PaintMode, Phase, PresetShelf};
-use crate::keys::SAVE_PRESET_INPUT_ID;
+use crate::app::{hex_code, uses_color, App, EffectChoice, Message, PaintMode, Phase, PresetShelf};
+use crate::keys::{HEX_INPUT_ID, SAVE_PRESET_INPUT_ID};
 use crate::light_pad::{self, LightPad};
 use crate::theme;
 use crate::view::widgets::{
@@ -229,7 +229,30 @@ fn color_control(app: &App) -> Element<'_, Message> {
     } else {
         theme::LABEL_COLOR.to_string()
     };
-    let hex = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+    let hex = hex_code(rgb);
+    let copy_label = if app.copied_hex.as_deref() == Some(hex.as_str()) {
+        format!("{}{hex}", theme::COPIED_PREFIX)
+    } else {
+        format!("{hex}{}", theme::COPY_HINT_SUFFIX)
+    };
+    let header = row![
+        section_label(label),
+        Space::with_width(Length::Fill),
+        button(text(copy_label).size(theme::TEXT_SMALL))
+            .padding([theme::SPACE_XXS, theme::SPACE_SM])
+            .on_press(Message::CopyHex)
+            .style(accent_text_button),
+    ]
+    .align_y(Alignment::Center);
+    let hex_box = text_input(
+        theme::HEX_PLACEHOLDER,
+        app.hex_draft.as_deref().unwrap_or(""),
+    )
+    .id(text_input::Id::new(HEX_INPUT_ID))
+    .size(theme::TEXT_SMALL)
+    .width(Length::Fixed(theme::HEX_INPUT_WIDTH))
+    .on_input(Message::HexDraftChanged)
+    .on_submit(Message::SubmitHex);
 
     let mut presets = row![].spacing(theme::SPACE_SM).align_y(Alignment::Center);
     for preset in theme::LIGHTING_PRESETS {
@@ -262,8 +285,11 @@ fn color_control(app: &App) -> Element<'_, Message> {
         );
     }
 
+    let presets = row![presets, Space::with_width(Length::Fill), hex_box]
+        .spacing(theme::SPACE_SM)
+        .align_y(Alignment::Center);
     column![
-        labelled(label, hex),
+        header,
         row![
             swatch(rgb, theme::CURRENT_SWATCH_SIZE),
             column![presets, channels].spacing(theme::SPACE_SM),

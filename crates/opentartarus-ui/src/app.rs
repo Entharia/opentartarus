@@ -1,8 +1,8 @@
 use crate::client::{self, FixPermissionsOutcome, Outgoing};
 use crate::keys::{
-    capture_window_key, is_combo_id, is_new_profile_id, is_save_preset_id, query_focused_id,
-    submit_record_key_params, submit_record_mouse_params, KeyCapture, NEW_PROFILE_INPUT_ID,
-    SAVE_PRESET_INPUT_ID,
+    capture_window_key, is_combo_id, is_hex_input_id, is_new_profile_id, is_save_preset_id,
+    query_focused_id, submit_record_key_params, submit_record_mouse_params, KeyCapture,
+    NEW_PROFILE_INPUT_ID, SAVE_PRESET_INPUT_ID,
 };
 use crate::theme;
 use iced::advanced::widget::Id;
@@ -154,6 +154,11 @@ pub enum Message {
     /// Applies one of the user's saved presets, by its place in the list.
     LightSavedPreset(usize),
     DeleteSavedPreset(usize),
+    /// Copies the shown colour's hex code to the clipboard.
+    CopyHex,
+    /// Typing in the hex box. A complete code applies at once.
+    HexDraftChanged(String),
+    SubmitHex,
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -262,6 +267,10 @@ pub struct App {
     pub saved_presets_paths: Option<Paths>,
     /// `Some` while the name box for saving a preset is open.
     pub save_preset_name: Option<String>,
+    /// What is typed in the hex box, while it differs from the colour.
+    pub hex_draft: Option<String>,
+    /// The hex code last copied, so the button can say so.
+    pub copied_hex: Option<String>,
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
@@ -314,6 +323,8 @@ impl Default for App {
             saved_presets: Vec::new(),
             saved_presets_paths: None,
             save_preset_name: None,
+            hex_draft: None,
+            copied_hex: None,
             new_profile_name: None,
             stick_mode: StickMode::default(),
             stick_rotation_deg: 0,
@@ -475,6 +486,12 @@ impl App {
                     }
                     return Task::none();
                 }
+                if is_hex_input_id(focused.as_ref()) {
+                    if matches!(key, Key::Named(Named::Escape)) {
+                        self.hex_draft = None;
+                    }
+                    return Task::none();
+                }
                 self.combo_focused = is_combo_id(focused.as_ref());
                 self.apply_captured_key(&key, modifiers, self.combo_focused);
                 Task::none()
@@ -595,6 +612,7 @@ impl App {
                 Task::none()
             }
             Message::LightingColor(channel, value) => {
+                self.hex_draft = None;
                 let mut rgb = self.edited_color();
                 if channel < 3 {
                     rgb[channel] = value;
@@ -680,6 +698,7 @@ impl App {
                 Task::none()
             }
             Message::LightingPreset(rgb) => {
+                self.hex_draft = None;
                 self.set_edited_color(rgb);
                 self.send_lighting();
                 self.lighting_saved = true;
@@ -687,9 +706,11 @@ impl App {
             }
             Message::PaintModePick(mode) => {
                 self.paint_mode = mode;
+                self.hex_draft = None;
                 Task::none()
             }
             Message::LightingCell(row, column) => {
+                self.hex_draft = None;
                 let row = row.min(FRAME_ROWS - 1);
                 self.lighting_cell = (row, column.min(ROW_KEYS[row] - 1));
                 // Picking a key on a pad lit in one colour starts a custom
@@ -741,12 +762,36 @@ impl App {
                 Task::none()
             }
             Message::LightSavedPreset(index) => {
+                self.hex_draft = None;
                 if let Some(preset) = self.saved_presets.get(index) {
                     self.lighting.effect = LightingEffect::Custom;
                     self.lighting.frame = Some(preset.frame.clone());
                     self.send_lighting();
                     self.lighting_saved = true;
                 }
+                Task::none()
+            }
+            Message::CopyHex => {
+                let hex = hex_code(self.edited_color());
+                self.copied_hex = Some(hex.clone());
+                iced::clipboard::write(hex)
+            }
+            Message::HexDraftChanged(text) => {
+                if let Some(rgb) = parse_hex(&text) {
+                    self.set_edited_color(rgb);
+                    self.send_lighting();
+                    self.lighting_saved = true;
+                }
+                self.hex_draft = Some(text);
+                Task::none()
+            }
+            Message::SubmitHex => {
+                if let Some(rgb) = self.hex_draft.as_deref().and_then(parse_hex) {
+                    self.set_edited_color(rgb);
+                    self.send_lighting();
+                    self.lighting_saved = true;
+                }
+                self.hex_draft = None;
                 Task::none()
             }
             Message::DeleteSavedPreset(index) => {
@@ -757,6 +802,7 @@ impl App {
                 Task::none()
             }
             Message::LightFramePreset(id) => {
+                self.hex_draft = None;
                 if let Some(preset) = preset_by_id(id) {
                     self.lighting.effect = LightingEffect::Custom;
                     self.lighting.frame = Some(preset.frame());
@@ -1430,6 +1476,36 @@ fn grab_conflict_name(raw: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+/// `rgb` as `#RRGGBB`.
+pub fn hex_code(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+/// A colour typed as hex: `#RRGGBB` or `#RGB`, with or without the `#`.
+pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let digits = text.trim().trim_start_matches('#');
+    if !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |s: &str| u8::from_str_radix(s, 16).ok();
+    match digits.len() {
+        6 => Some([
+            channel(&digits[0..2])?,
+            channel(&digits[2..4])?,
+            channel(&digits[4..6])?,
+        ]),
+        3 => {
+            let mut out = [0u8; 3];
+            for (i, c) in digits.chars().enumerate() {
+                let v = channel(&c.to_string())?;
+                out[i] = v * 17;
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 pub fn uses_color(effect: LightingEffect) -> bool {
     matches!(
         effect,
@@ -2005,6 +2081,40 @@ mod tests {
         app.lighting.frame = Some(solid_frame([0, 0, 0]));
         let _ = app.update(Message::LightingCell(4, 5));
         assert_eq!(app.lighting_cell, (4, 3));
+    }
+
+    #[test]
+    fn hex_codes_parse_in_every_usual_form() {
+        assert_eq!(parse_hex("#FF7C0A"), Some([0xff, 0x7c, 0x0a]));
+        assert_eq!(parse_hex(" ff7c0a "), Some([0xff, 0x7c, 0x0a]));
+        assert_eq!(parse_hex("#f80"), Some([0xff, 0x88, 0x00]));
+        assert_eq!(parse_hex("#FF7C0"), None);
+        assert_eq!(parse_hex("#GG0000"), None);
+        assert_eq!(parse_hex(""), None);
+        assert_eq!(hex_code([0xff, 0x7c, 0x0a]), "#FF7C0A");
+    }
+
+    #[test]
+    fn typing_a_whole_hex_code_colours_the_picked_row() {
+        let mut app = App::default();
+        let _ = app.update(Message::LightFramePreset("ocean"));
+        let _ = app.update(Message::LightingCell(0, 0));
+        let _ = app.update(Message::HexDraftChanged("#12".into()));
+        assert_ne!(app.edited_color(), [0x12, 0x00, 0x00], "half a code waits");
+        let _ = app.update(Message::HexDraftChanged("#123456".into()));
+        assert_eq!(app.edited_color(), [0x12, 0x34, 0x56]);
+        let _ = app.update(Message::SubmitHex);
+        assert_eq!(app.hex_draft, None);
+        let frame = app.lighting.frame.clone().unwrap();
+        assert!(frame[0].iter().all(|c| *c == [0x12, 0x34, 0x56]));
+    }
+
+    #[test]
+    fn copying_remembers_the_code_for_the_button() {
+        let mut app = App::default();
+        app.lighting.color = Some([1, 2, 3]);
+        let _ = app.update(Message::CopyHex);
+        assert_eq!(app.copied_hex.as_deref(), Some("#010203"));
     }
 
     #[test]

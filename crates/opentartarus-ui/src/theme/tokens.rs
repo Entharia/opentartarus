@@ -113,6 +113,7 @@ pub const LIGHTING_CONTROLS_WIDTH: f32 = 520.0;
 pub const CURRENT_SWATCH_SIZE: f32 = 64.0;
 pub const CHANNEL_LABEL_WIDTH: f32 = 12.0;
 pub const CHANNEL_VALUE_WIDTH: f32 = 28.0;
+pub const HEX_INPUT_WIDTH: f32 = 140.0;
 /// The small pad pictures in the preset list.
 pub const PRESET_THUMB_WIDTH: f32 = 52.0;
 pub const PRESET_THUMB_ROW_HEIGHT: f32 = 5.0;

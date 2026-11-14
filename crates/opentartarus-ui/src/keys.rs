@@ -78,6 +78,13 @@ pub fn is_save_preset_id(id: Option<&Id>) -> bool {
     id == Some(&Id::new(SAVE_PRESET_INPUT_ID))
 }
 
+/// The hex colour box on the lighting tab. Typing there is never a binding.
+pub const HEX_INPUT_ID: &str = "hex-colour";
+
+pub fn is_hex_input_id(id: Option<&Id>) -> bool {
+    id == Some(&Id::new(HEX_INPUT_ID))
+}
+
 pub fn focused_widget_id() -> impl Operation<Option<Id>> {
     struct FocusedId {
         focused: Option<Id>,
