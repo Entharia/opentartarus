@@ -1,4 +1,4 @@
-use crate::app::{uses_color, App, EffectChoice, Message, Phase, PresetShelf};
+use crate::app::{uses_color, App, EffectChoice, Message, PaintMode, Phase, PresetShelf};
 use crate::keys::SAVE_PRESET_INPUT_ID;
 use crate::light_pad::{self, LightPad};
 use crate::theme;
@@ -8,6 +8,7 @@ use crate::view::widgets::{
 };
 use iced::widget::{button, column, container, row, scrollable, slider, text, text_input, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
+use opentartarus_core::labels::{v2_pro_key_number, V2_PRO_ROWS};
 use opentartarus_core::light_presets::{
     preset_by_id, preset_for_frame, LightPreset, PresetGroup, PRESETS,
 };
@@ -224,7 +225,7 @@ fn brightness_control(app: &App) -> Element<'_, Message> {
 fn color_control(app: &App) -> Element<'_, Message> {
     let rgb = app.edited_color();
     let label = if app.lighting.effect == LightingEffect::Custom {
-        format!("{}{}", theme::LABEL_ROW_COLOR_PREFIX, app.lighting_row + 1)
+        painted_label(app)
     } else {
         theme::LABEL_COLOR.to_string()
     };
@@ -274,6 +275,55 @@ fn color_control(app: &App) -> Element<'_, Message> {
     .into()
 }
 
+/// What the colour controls are editing, in words: "Colour of row 3",
+/// "Colour of column 2" or "Colour of key 14".
+fn painted_label(app: &App) -> String {
+    let (row, column) = app.lighting_cell;
+    match app.paint_mode {
+        PaintMode::Row => format!("{}{}", theme::LABEL_ROW_COLOR_PREFIX, row + 1),
+        PaintMode::Column => format!("{}{}", theme::LABEL_COLUMN_COLOR_PREFIX, column + 1),
+        PaintMode::Key => {
+            let number = V2_PRO_ROWS
+                .get(row)
+                .and_then(|keys| keys.get(column))
+                .and_then(|id| v2_pro_key_number(*id))
+                .unwrap_or(0);
+            format!("{}{number:02}", theme::LABEL_KEY_COLOR_PREFIX)
+        }
+    }
+}
+
+fn paint_mode_name(mode: PaintMode) -> &'static str {
+    match mode {
+        PaintMode::Row => theme::PAINT_MODE_ROW,
+        PaintMode::Column => theme::PAINT_MODE_COLUMN,
+        PaintMode::Key => theme::PAINT_MODE_KEY,
+    }
+}
+
+/// `Paint: Row | Column | Key`, under the pad while a frame is being edited.
+fn paint_modes(app: &App) -> Element<'_, Message> {
+    let mut line = row![text(theme::LABEL_PAINT)
+        .size(theme::TEXT_SMALL)
+        .color(theme::COLOR_TEXT_FAINT)]
+    .spacing(theme::SPACE_XS)
+    .align_y(Alignment::Center);
+    for mode in PaintMode::ALL {
+        let style = if app.paint_mode == mode {
+            selected_effect_button
+        } else {
+            quiet_button
+        };
+        line = line.push(
+            button(text(paint_mode_name(mode)).size(theme::TEXT_SMALL))
+                .padding([theme::SPACE_XS, theme::SPACE_MD])
+                .on_press(Message::PaintModePick(mode))
+                .style(style),
+        );
+    }
+    line.into()
+}
+
 fn pad_hint(app: &App) -> &'static str {
     if app.lighting.effect == LightingEffect::Custom {
         theme::PAD_HINT_CUSTOM
@@ -303,8 +353,12 @@ pub fn lighting_tab(app: &App) -> Element<'_, Message> {
                 model: app.model,
                 frame: preview_frame(app),
                 brightness: app.lighting.brightness,
-                selected_row: custom.then_some(app.lighting_row),
-                rows_pickable: offers_custom(app),
+                selected: if custom {
+                    app.painted_cells()
+                } else {
+                    Vec::new()
+                },
+                keys_pickable: offers_custom(app),
             },
             theme::LIGHT_PAD_HEIGHT,
         );
@@ -312,6 +366,9 @@ pub fn lighting_tab(app: &App) -> Element<'_, Message> {
             .spacing(theme::SPACE_SM)
             .align_x(Alignment::Center);
         if app.model == Some(DeviceModel::V2Pro) {
+            if custom {
+                top = top.push(paint_modes(app));
+            }
             top = top.push(
                 text(pad_hint(app))
                     .size(theme::TEXT_SMALL)

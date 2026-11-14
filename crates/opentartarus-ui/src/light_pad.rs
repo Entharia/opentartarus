@@ -1,7 +1,7 @@
 //! The pad as the lighting tab draws it: the Keys tab's caps, each lit in
 //! the colour its LED shows. On the V2 Pro only the 27 face keys have LEDs,
-//! so the stick and the Hypershift key are left out, and a click picks the
-//! key's row.
+//! so the stick and the Hypershift key are left out, and a click picks a
+//! key.
 
 use crate::app::Message;
 use crate::keypad::{corner_for, key_rects};
@@ -20,10 +20,10 @@ pub struct LightPad {
     /// for every key.
     pub frame: LightFrame,
     pub brightness: u8,
-    /// The row the colour controls edit, outlined. `None` hides it.
-    pub selected_row: Option<usize>,
-    /// Whether clicking a key picks its row.
-    pub rows_pickable: bool,
+    /// The keys the colour controls edit, as `(row, column)`, outlined.
+    pub selected: Vec<(usize, usize)>,
+    /// Whether clicking a key picks it.
+    pub keys_pickable: bool,
 }
 
 /// An unlit LED still shows a little of its colour, so a dim pad never
@@ -104,15 +104,14 @@ impl LightPad {
         )
     }
 
-    fn row_at(&self, local: Point, size: Size) -> Option<usize> {
-        if !self.rows_pickable || self.model != Some(DeviceModel::V2Pro) {
+    fn cell_at(&self, local: Point, size: Size) -> Option<(usize, usize)> {
+        if !self.keys_pickable || self.model != Some(DeviceModel::V2Pro) {
             return None;
         }
         lit_rects(size, self.model)
             .into_iter()
             .find(|(_, rect)| rect.contains(local))
             .and_then(|(id, _)| v2_pro_grid_position(id))
-            .map(|(row, _)| row)
     }
 }
 
@@ -163,9 +162,11 @@ impl Program<Message> for LightPad {
                     .with_width(theme::BORDER_HAIRLINE),
             );
         }
-        if let (Some(selected), Some(DeviceModel::V2Pro)) = (self.selected_row, self.model) {
+        if self.model == Some(DeviceModel::V2Pro) {
             for (id, rect) in &rects {
-                if v2_pro_grid_position(*id).map(|(row, _)| row) != Some(selected) {
+                let picked =
+                    v2_pro_grid_position(*id).is_some_and(|cell| self.selected.contains(&cell));
+                if !picked {
                     continue;
                 }
                 let path = Path::rounded_rectangle(
@@ -198,13 +199,13 @@ impl Program<Message> for LightPad {
         cursor: mouse::Cursor,
     ) -> (iced::event::Status, Option<Message>) {
         if let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
-            if let Some(row) = cursor
+            if let Some((row, column)) = cursor
                 .position_in(bounds)
-                .and_then(|local| self.row_at(local, bounds.size()))
+                .and_then(|local| self.cell_at(local, bounds.size()))
             {
                 return (
                     iced::event::Status::Captured,
-                    Some(Message::LightingRow(row)),
+                    Some(Message::LightingCell(row, column)),
                 );
             }
         }
@@ -219,7 +220,7 @@ impl Program<Message> for LightPad {
     ) -> mouse::Interaction {
         match cursor
             .position_in(bounds)
-            .and_then(|local| self.row_at(local, bounds.size()))
+            .and_then(|local| self.cell_at(local, bounds.size()))
         {
             Some(_) => mouse::Interaction::Pointer,
             None => mouse::Interaction::default(),
@@ -244,8 +245,8 @@ mod tests {
             model,
             frame,
             brightness: 100,
-            selected_row: None,
-            rows_pickable: true,
+            selected: Vec::new(),
+            keys_pickable: true,
         }
     }
 
@@ -307,19 +308,19 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_key_finds_its_row_only_where_rows_are_pickable() {
+    fn a_click_on_a_key_finds_it_only_where_keys_are_pickable() {
         let size = Size::new(600.0, 300.0);
         let v2_pro = pad(Some(DeviceModel::V2Pro), Vec::new());
         let rects = lit_rects(size, v2_pro.model);
         let (_, kp16) = rects.iter().find(|(id, _)| *id == KeyId::Kp16).unwrap();
         let centre = Point::new(kp16.center_x(), kp16.center_y());
-        assert_eq!(v2_pro.row_at(centre, size), Some(3));
+        assert_eq!(v2_pro.cell_at(centre, size), Some((3, 0)));
         let locked = LightPad {
-            rows_pickable: false,
+            keys_pickable: false,
             ..v2_pro
         };
-        assert_eq!(locked.row_at(centre, size), None);
+        assert_eq!(locked.cell_at(centre, size), None);
         let v2 = pad(Some(DeviceModel::V2), Vec::new());
-        assert_eq!(v2.row_at(centre, size), None);
+        assert_eq!(v2.cell_at(centre, size), None);
     }
 }

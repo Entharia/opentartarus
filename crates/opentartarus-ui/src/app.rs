@@ -22,7 +22,9 @@ use opentartarus_core::ipc::{EventMethod, Method, WireError};
 use opentartarus_core::light_presets::{
     preset_by_id, saved_name, with_saved, PresetGroup, SavedPreset,
 };
-use opentartarus_core::lighting::{fill_row, solid_frame, FRAME_ROWS, HOME_ROW};
+use opentartarus_core::lighting::{
+    fill_column, fill_row, set_key, solid_frame, FRAME_ROWS, HOME_ROW, ROW_KEYS,
+};
 use opentartarus_core::pack;
 use opentartarus_core::paths::Paths;
 use opentartarus_core::store;
@@ -136,8 +138,10 @@ pub enum Message {
     ToggleMenu,
     HoverKey(Option<KeyId>),
     LightingPreset([u8; 3]),
-    /// Picks which row of a custom frame the colour controls edit.
-    LightingRow(usize),
+    /// Picks the key at `row`, `column`. The paint mode decides whether the
+    /// colour controls then edit its row, its column or just that key.
+    LightingCell(usize, usize),
+    PaintModePick(PaintMode),
     /// Replaces the custom frame with a preset's, by preset id.
     LightFramePreset(&'static str),
     /// Shows one shelf of presets in the lighting tab's side panel.
@@ -244,8 +248,11 @@ pub struct App {
     pub menu_open: bool,
     pub hovered_key: Option<KeyId>,
     pub lighting_saved: bool,
-    /// The row of a custom frame that the colour controls edit.
-    pub lighting_row: usize,
+    /// The key last picked on the lighting tab's pad, as `(row, column)`.
+    pub lighting_cell: (usize, usize),
+    /// Whether the colour controls edit the picked key's row, column or
+    /// the key alone.
+    pub paint_mode: PaintMode,
     /// The presets the lighting tab's side panel lists.
     pub preset_shelf: PresetShelf,
     /// The lighting presets the user saved, shared by every profile.
@@ -301,7 +308,8 @@ impl Default for App {
             menu_open: false,
             hovered_key: None,
             lighting_saved: false,
-            lighting_row: HOME_ROW,
+            lighting_cell: (HOME_ROW, 0),
+            paint_mode: PaintMode::Row,
             preset_shelf: PresetShelf::Group(PresetGroup::WorldOfWarcraft),
             saved_presets: Vec::new(),
             saved_presets_paths: None,
@@ -677,10 +685,15 @@ impl App {
                 self.lighting_saved = true;
                 Task::none()
             }
-            Message::LightingRow(row) => {
-                self.lighting_row = row.min(FRAME_ROWS - 1);
-                // Picking a row on a pad lit in one colour starts a custom
-                // frame in that colour, so the row can then take its own.
+            Message::PaintModePick(mode) => {
+                self.paint_mode = mode;
+                Task::none()
+            }
+            Message::LightingCell(row, column) => {
+                let row = row.min(FRAME_ROWS - 1);
+                self.lighting_cell = (row, column.min(ROW_KEYS[row] - 1));
+                // Picking a key on a pad lit in one colour starts a custom
+                // frame in that colour, so the key can then take its own.
                 if self.lighting.effect != LightingEffect::Custom
                     && self
                         .offered_effects()
@@ -1079,16 +1092,17 @@ impl App {
         }
     }
 
-    /// The colour the colour controls show: the selected row's for a custom
+    /// The colour the colour controls show: the picked key's for a custom
     /// frame, else the plain colour.
     pub fn edited_color(&self) -> [u8; 3] {
         if self.lighting.effect == LightingEffect::Custom {
+            let (row, column) = self.lighting_cell;
             if let Some(rgb) = self
                 .lighting
                 .frame
                 .as_ref()
-                .and_then(|frame| frame.get(self.lighting_row))
-                .and_then(|row| row.first())
+                .and_then(|frame| frame.get(row))
+                .and_then(|cells| cells.get(column))
             {
                 return *rgb;
             }
@@ -1096,10 +1110,28 @@ impl App {
         self.lighting.color.unwrap_or(theme::DEFAULT_LIGHT_COLOR)
     }
 
+    /// The keys the colour controls are editing, as `(row, column)`.
+    pub fn painted_cells(&self) -> Vec<(usize, usize)> {
+        let (row, column) = self.lighting_cell;
+        match self.paint_mode {
+            PaintMode::Row => (0..ROW_KEYS[row]).map(|c| (row, c)).collect(),
+            PaintMode::Column => (0..FRAME_ROWS)
+                .filter(|r| column < ROW_KEYS[*r])
+                .map(|r| (r, column))
+                .collect(),
+            PaintMode::Key => vec![(row, column)],
+        }
+    }
+
     fn set_edited_color(&mut self, rgb: [u8; 3]) {
         if self.lighting.effect == LightingEffect::Custom {
             let frame = self.lighting.frame.get_or_insert_with(Vec::new);
-            fill_row(frame, self.lighting_row, rgb);
+            let (row, column) = self.lighting_cell;
+            match self.paint_mode {
+                PaintMode::Row => fill_row(frame, row, rgb),
+                PaintMode::Column => fill_column(frame, column, rgb),
+                PaintMode::Key => set_key(frame, row, column, rgb),
+            }
         } else {
             self.lighting.color = Some(rgb);
         }
@@ -1419,6 +1451,19 @@ pub fn effect_name(effect: LightingEffect) -> &'static str {
         LightingEffect::None => "none",
         LightingEffect::Custom => "custom",
     }
+}
+
+/// What the colour controls change on a custom frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaintMode {
+    #[default]
+    Row,
+    Column,
+    Key,
+}
+
+impl PaintMode {
+    pub const ALL: [PaintMode; 3] = [PaintMode::Row, PaintMode::Column, PaintMode::Key];
 }
 
 /// What the lighting tab's side panel lists: one group of shipped presets,
@@ -1860,7 +1905,7 @@ mod tests {
         let mut app = App::default();
         app.lighting.effect = LightingEffect::Custom;
         app.lighting.frame = Some(solid_frame([0, 0, 0]));
-        let _ = app.update(Message::LightingRow(1));
+        let _ = app.update(Message::LightingCell(1, 3));
         let _ = app.update(Message::LightingPreset([255, 0, 0]));
         let _ = app.update(Message::LightingColor(2, 99));
         let frame = app.lighting.frame.clone().unwrap();
@@ -1927,6 +1972,39 @@ mod tests {
         assert_eq!(app.saved_presets.len(), 1, "no such preset, nothing gone");
         let _ = app.update(Message::DeleteSavedPreset(0));
         assert!(app.saved_presets.is_empty());
+    }
+
+    #[test]
+    fn column_and_key_modes_paint_only_their_keys() {
+        let mut app = App::default();
+        app.lighting.effect = LightingEffect::Custom;
+        app.lighting.frame = Some(solid_frame([0, 0, 0]));
+        let _ = app.update(Message::PaintModePick(PaintMode::Column));
+        let _ = app.update(Message::LightingCell(0, 5));
+        let _ = app.update(Message::LightingPreset([1, 2, 3]));
+        let frame = app.lighting.frame.clone().unwrap();
+        assert_eq!(frame[0][5], [1, 2, 3]);
+        assert_eq!(frame[2][5], [1, 2, 3]);
+        assert_eq!(frame[3][4], [0, 0, 0]);
+        assert_eq!(app.painted_cells(), vec![(0, 5), (1, 5), (2, 5)]);
+
+        let _ = app.update(Message::PaintModePick(PaintMode::Key));
+        let _ = app.update(Message::LightingCell(4, 3));
+        let _ = app.update(Message::LightingPreset([9, 9, 9]));
+        let frame = app.lighting.frame.clone().unwrap();
+        assert_eq!(frame[4][3], [9, 9, 9]);
+        assert_eq!(frame[4][2], [0, 0, 0]);
+        assert_eq!(app.edited_color(), [9, 9, 9]);
+        assert_eq!(app.painted_cells(), vec![(4, 3)]);
+    }
+
+    #[test]
+    fn a_picked_cell_past_a_short_row_lands_on_its_last_key() {
+        let mut app = App::default();
+        app.lighting.effect = LightingEffect::Custom;
+        app.lighting.frame = Some(solid_frame([0, 0, 0]));
+        let _ = app.update(Message::LightingCell(4, 5));
+        assert_eq!(app.lighting_cell, (4, 3));
     }
 
     #[test]

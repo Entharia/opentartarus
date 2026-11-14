@@ -7,6 +7,8 @@ pub const FRAME_ROWS: usize = 5;
 pub const FRAME_COLUMNS: usize = 6;
 /// The rest row, keys 11 to 15 plus 23.
 pub const HOME_ROW: usize = 2;
+/// Keys per row on the V2 Pro, top to bottom.
+pub const ROW_KEYS: [usize; FRAME_ROWS] = [6, 6, 6, 5, 4];
 const UNLIT: [u8; 3] = [0, 0, 0];
 
 pub trait LightingClient {
@@ -113,6 +115,36 @@ pub fn fill_row(frame: &mut LightFrame, row: usize, rgb: [u8; 3]) {
     frame[row] = vec![rgb; FRAME_COLUMNS];
 }
 
+/// Grows `frame` to the full grid, leaving new cells dark.
+fn fill_out(frame: &mut LightFrame) {
+    frame.resize(FRAME_ROWS, Vec::new());
+    for row in frame.iter_mut() {
+        row.resize(FRAME_COLUMNS, UNLIT);
+    }
+}
+
+/// Sets every key in `column`, in each row long enough to have one.
+pub fn fill_column(frame: &mut LightFrame, column: usize, rgb: [u8; 3]) {
+    if column >= FRAME_COLUMNS {
+        return;
+    }
+    fill_out(frame);
+    for (row, cells) in frame.iter_mut().enumerate() {
+        if column < ROW_KEYS[row] {
+            cells[column] = rgb;
+        }
+    }
+}
+
+/// Sets the one key at `row`, `column`, if there is a key there.
+pub fn set_key(frame: &mut LightFrame, row: usize, column: usize, rgb: [u8; 3]) {
+    if row >= FRAME_ROWS || column >= ROW_KEYS[row] {
+        return;
+    }
+    fill_out(frame);
+    frame[row][column] = rgb;
+}
+
 /// A frame with every key the same colour.
 pub fn solid_frame(rgb: [u8; 3]) -> LightFrame {
     vec![vec![rgb; FRAME_COLUMNS]; FRAME_ROWS]
@@ -189,6 +221,28 @@ mod tests {
         assert_eq!(frame[0], vec![UNLIT; FRAME_COLUMNS]);
         fill_row(&mut frame, FRAME_ROWS, [1, 1, 1]);
         assert_eq!(frame.len(), HOME_ROW + 1);
+    }
+
+    #[test]
+    fn fill_column_skips_rows_too_short_for_it() {
+        let mut frame = Vec::new();
+        fill_column(&mut frame, 5, [7, 7, 7]);
+        assert_eq!(frame.len(), FRAME_ROWS);
+        assert_eq!(frame[0][5], [7, 7, 7]);
+        assert_eq!(frame[2][5], [7, 7, 7]);
+        assert_eq!(frame[3][5], UNLIT, "row 4 has only five keys");
+        assert_eq!(frame[4][5], UNLIT);
+        assert_eq!(frame[0][4], UNLIT);
+    }
+
+    #[test]
+    fn set_key_changes_one_real_key() {
+        let mut frame = solid_frame([1, 1, 1]);
+        set_key(&mut frame, 3, 4, [9, 0, 0]);
+        assert_eq!(frame[3][4], [9, 0, 0]);
+        assert_eq!(frame[3][3], [1, 1, 1]);
+        set_key(&mut frame, 4, 5, [9, 0, 0]);
+        assert_eq!(frame[4][5], [1, 1, 1], "no key there");
     }
 
     #[test]

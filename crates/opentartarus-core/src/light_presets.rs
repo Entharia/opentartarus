@@ -2,7 +2,7 @@
 //! from a few colours; `LightPreset::frame` turns that into a colour per key
 //! on the V2 Pro's grid.
 
-use crate::lighting::{FRAME_COLUMNS, FRAME_ROWS, HOME_ROW};
+use crate::lighting::{FRAME_COLUMNS, FRAME_ROWS, HOME_ROW, ROW_KEYS};
 use crate::types::LightFrame;
 use serde::{Deserialize, Serialize};
 
@@ -94,8 +94,6 @@ pub struct LightPreset {
     pub fill: Fill,
 }
 
-/// Keys per row on the V2 Pro, top to bottom.
-const ROW_KEYS: [usize; FRAME_ROWS] = [6, 6, 6, 5, 4];
 const UNLIT: [u8; 3] = [0, 0, 0];
 
 impl LightPreset {

@@ -40,8 +40,14 @@ pub const LABEL_BRIGHTNESS: &str = "Brightness";
 pub const LABEL_COLOR: &str = "Colour";
 pub const LABEL_PRESETS: &str = "Presets";
 pub const LABEL_ROW_COLOR_PREFIX: &str = "Colour of row ";
-pub const PAD_HINT_PICK_ROW: &str = "Click a key to give its row its own colour.";
-pub const PAD_HINT_CUSTOM: &str = "Click a key to pick its row.";
+pub const LABEL_COLUMN_COLOR_PREFIX: &str = "Colour of column ";
+pub const LABEL_KEY_COLOR_PREFIX: &str = "Colour of key ";
+pub const LABEL_PAINT: &str = "Paint";
+pub const PAINT_MODE_ROW: &str = "Row";
+pub const PAINT_MODE_COLUMN: &str = "Column";
+pub const PAINT_MODE_KEY: &str = "Key";
+pub const PAD_HINT_PICK_ROW: &str = "Click a key to give it its own colour.";
+pub const PAD_HINT_CUSTOM: &str = "Click a key to pick it.";
 pub const PRESETS_NEED_V2_PRO: &str =
     "Presets colour each key on its own, which needs a Tartarus V2 Pro.";
 pub const PRESET_GROUP_WOW: &str = "WoW";
