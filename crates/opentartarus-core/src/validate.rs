@@ -2,6 +2,7 @@ use crate::constants::{
     HOLD_REPEAT_RATE_MAX_MS, HOLD_REPEAT_RATE_MIN_MS, MACRO_MAX_DELAY_MS, MACRO_MAX_STEPS,
 };
 use crate::error::ErrorCode;
+use crate::lighting::{FRAME_COLUMNS, FRAME_ROWS};
 use crate::types::{
     Action, DeviceModel, KeyId, Layer, Lighting, LightingEffect, MacroKind, MacroStep, Modifier,
     Profile,
@@ -238,6 +239,14 @@ fn validate_lighting(lighting: &Lighting) -> Result<(), ErrorCode> {
     if lighting.effect == LightingEffect::Static && lighting.color.is_none() {
         return Err(ErrorCode::InvalidProfile);
     }
+    if lighting.effect == LightingEffect::Custom && lighting.frame.is_none() {
+        return Err(ErrorCode::InvalidProfile);
+    }
+    if let Some(frame) = &lighting.frame {
+        if frame.len() > FRAME_ROWS || frame.iter().any(|row| row.len() > FRAME_COLUMNS) {
+            return Err(ErrorCode::InvalidProfile);
+        }
+    }
     Ok(())
 }
 
@@ -388,6 +397,20 @@ mod tests {
         let p: Profile = serde_json::from_str(lol_json()).unwrap();
         p.validate().unwrap();
         assert_eq!(p.id, "league-of-legends");
+    }
+
+    #[test]
+    fn custom_lighting_needs_a_frame_that_fits_the_grid() {
+        let mut p: Profile = serde_json::from_str(lol_json()).unwrap();
+        p.lighting.effect = LightingEffect::Custom;
+        p.lighting.frame = None;
+        assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
+        p.lighting.frame = Some(crate::lighting::solid_frame([1, 2, 3]));
+        assert!(p.validate().is_ok());
+        p.lighting.frame = Some(vec![vec![[0, 0, 0]; FRAME_COLUMNS + 1]]);
+        assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
+        p.lighting.frame = Some(vec![vec![[0, 0, 0]]; FRAME_ROWS + 1]);
+        assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
     }
 
     #[test]

@@ -1,5 +1,13 @@
 use crate::error::ErrorCode;
-use crate::types::Lighting;
+use crate::types::{LightFrame, Lighting};
+
+/// The V2 Pro's LED grid: 5 rows of 6, one row per row of keys. Rows that
+/// are shorter than 6 keys leave their last cells unused.
+pub const FRAME_ROWS: usize = 5;
+pub const FRAME_COLUMNS: usize = 6;
+/// The rest row, keys 11 to 15 plus 23.
+pub const HOME_ROW: usize = 2;
+const UNLIT: [u8; 3] = [0, 0, 0];
 
 pub trait LightingClient {
     fn apply(&mut self, lighting: &Lighting) -> Result<(), ErrorCode>;
@@ -74,6 +82,42 @@ pub fn wave_sysfs_value() -> u8 {
     1
 }
 
+/// The bytes razerkbd's `matrix_custom_frame` takes for a whole frame: per
+/// row, its index, the first and last column, then an RGB triple per column.
+/// Missing cells go dark, so a short frame still covers the pad.
+pub fn custom_frame_payload(frame: &LightFrame) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(FRAME_ROWS * (3 + FRAME_COLUMNS * 3));
+    for row in 0..FRAME_ROWS {
+        payload.extend_from_slice(&[row as u8, 0, (FRAME_COLUMNS - 1) as u8]);
+        for column in 0..FRAME_COLUMNS {
+            let rgb = frame
+                .get(row)
+                .and_then(|cells| cells.get(column))
+                .copied()
+                .unwrap_or(UNLIT);
+            payload.extend_from_slice(&rgb);
+        }
+    }
+    payload
+}
+
+/// A frame with every key in `row` set to `rgb`. Rows past the frame's
+/// end are added first.
+pub fn fill_row(frame: &mut LightFrame, row: usize, rgb: [u8; 3]) {
+    if row >= FRAME_ROWS {
+        return;
+    }
+    while frame.len() <= row {
+        frame.push(vec![UNLIT; FRAME_COLUMNS]);
+    }
+    frame[row] = vec![rgb; FRAME_COLUMNS];
+}
+
+/// A frame with every key the same colour.
+pub fn solid_frame(rgb: [u8; 3]) -> LightFrame {
+    vec![vec![rgb; FRAME_COLUMNS]; FRAME_ROWS]
+}
+
 impl LightingClient for NullLighting {
     fn apply(&mut self, _lighting: &Lighting) -> Result<(), ErrorCode> {
         Err(ErrorCode::Lighting)
@@ -115,11 +159,54 @@ mod tests {
             effect: LightingEffect::Static,
             brightness: 80,
             color: Some([0, 180, 255]),
+            frame: None,
         };
         c.apply(&l).unwrap();
         assert_eq!(c.last.unwrap().color, Some([0, 180, 255]));
         assert_eq!(brightness_to_razer(80), 204);
         assert_eq!(wave_sysfs_value(), 1);
+    }
+
+    #[test]
+    fn custom_frame_payload_covers_every_row_and_pads_missing_cells() {
+        let frame = vec![vec![[1, 2, 3]; FRAME_COLUMNS], vec![[9, 9, 9]]];
+        let payload = custom_frame_payload(&frame);
+        assert_eq!(payload.len(), FRAME_ROWS * (3 + FRAME_COLUMNS * 3));
+        assert_eq!(&payload[..6], &[0, 0, 5, 1, 2, 3]);
+        let row1 = &payload[21..42];
+        assert_eq!(&row1[..6], &[1, 0, 5, 9, 9, 9]);
+        assert!(row1[6..].iter().all(|b| *b == 0), "missing cells go dark");
+        let row4 = &payload[84..];
+        assert_eq!(&row4[..3], &[4, 0, 5]);
+    }
+
+    #[test]
+    fn fill_row_grows_the_frame_and_ignores_rows_past_the_grid() {
+        let mut frame = Vec::new();
+        fill_row(&mut frame, HOME_ROW, [5, 6, 7]);
+        assert_eq!(frame.len(), HOME_ROW + 1);
+        assert_eq!(frame[HOME_ROW], vec![[5, 6, 7]; FRAME_COLUMNS]);
+        assert_eq!(frame[0], vec![UNLIT; FRAME_COLUMNS]);
+        fill_row(&mut frame, FRAME_ROWS, [1, 1, 1]);
+        assert_eq!(frame.len(), HOME_ROW + 1);
+    }
+
+    #[test]
+    fn main_color_of_a_frame_is_the_home_row() {
+        let mut frame = solid_frame([1, 1, 1]);
+        fill_row(&mut frame, HOME_ROW, [200, 0, 50]);
+        let lighting = Lighting {
+            effect: LightingEffect::Custom,
+            brightness: 80,
+            color: Some([9, 9, 9]),
+            frame: Some(frame),
+        };
+        assert_eq!(lighting.main_color(), Some([200, 0, 50]));
+        let plain = Lighting {
+            effect: LightingEffect::Static,
+            ..lighting
+        };
+        assert_eq!(plain.main_color(), Some([9, 9, 9]));
     }
 
     #[test]
@@ -131,6 +218,7 @@ mod tests {
                 effect: LightingEffect::None,
                 brightness: 80,
                 color: None,
+                frame: None,
             })
             .unwrap_err();
         assert_eq!(err, ErrorCode::Lighting);
@@ -142,6 +230,7 @@ mod tests {
             effect: LightingEffect::Spectrum,
             brightness: 40,
             color: None,
+            frame: None,
         }
     }
 

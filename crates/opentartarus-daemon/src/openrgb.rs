@@ -77,7 +77,8 @@ pub fn openrgb_device_name(vid: Option<u16>, pid: Option<u16>) -> Option<&'stati
 pub fn openrgb_mode(effect: LightingEffect) -> Result<&'static str, ErrorCode> {
     match effect {
         LightingEffect::None => Ok(OPENRGB_MODE_OFF),
-        LightingEffect::Static => Ok(OPENRGB_MODE_STATIC),
+        // OpenRGB doesn't know these pads' grids; a frame shows its home row.
+        LightingEffect::Static | LightingEffect::Custom => Ok(OPENRGB_MODE_STATIC),
         LightingEffect::Breath => Ok(OPENRGB_MODE_BREATHING),
         LightingEffect::Spectrum => Ok(OPENRGB_MODE_SPECTRUM),
         LightingEffect::Wave => Ok(OPENRGB_MODE_WAVE),
@@ -102,7 +103,7 @@ pub fn openrgb_args(
         lighting.brightness.to_string(),
     ];
     if openrgb_mode_uses_color(lighting.effect) {
-        let rgb = lighting.color.unwrap_or([u8::MAX, u8::MAX, u8::MAX]);
+        let rgb = lighting.main_color().unwrap_or([u8::MAX, u8::MAX, u8::MAX]);
         args.push(OPENRGB_COLOR_FLAG.to_string());
         args.push(rgb_hex(rgb));
     }
@@ -110,7 +111,10 @@ pub fn openrgb_args(
 }
 
 fn openrgb_mode_uses_color(effect: LightingEffect) -> bool {
-    matches!(effect, LightingEffect::Static | LightingEffect::Breath)
+    matches!(
+        effect,
+        LightingEffect::Static | LightingEffect::Breath | LightingEffect::Custom
+    )
 }
 
 fn rgb_hex(rgb: [u8; 3]) -> String {
@@ -163,6 +167,7 @@ mod tests {
             effect,
             brightness,
             color,
+            frame: None,
         }
     }
 

@@ -486,7 +486,14 @@ pub enum LightingEffect {
     Reactive,
     Starlight,
     None,
+    /// A colour for every key, from `Lighting::frame`. Only the V2 Pro's LED
+    /// grid is mapped; other models show the home row's colour, static.
+    Custom,
 }
+
+/// One colour per key, row by row. On the V2 Pro, cell `[row][column]` is
+/// the key at that place in `labels::V2_PRO_ROWS`.
+pub type LightFrame = Vec<Vec<[u8; 3]>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lighting {
@@ -494,6 +501,27 @@ pub struct Lighting {
     pub brightness: u8,
     #[serde(default)]
     pub color: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<LightFrame>,
+}
+
+impl Lighting {
+    /// The one colour that stands for this lighting, for swatches and for
+    /// pads that can't show a frame: the home row's first key for a custom
+    /// frame, else the plain colour.
+    pub fn main_color(&self) -> Option<[u8; 3]> {
+        if self.effect == LightingEffect::Custom {
+            if let Some(color) = self
+                .frame
+                .as_ref()
+                .and_then(|frame| frame.get(crate::lighting::HOME_ROW))
+                .and_then(|row| row.first())
+            {
+                return Some(*color);
+            }
+        }
+        self.color
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

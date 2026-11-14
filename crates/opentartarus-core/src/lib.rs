@@ -5,6 +5,7 @@ pub mod error;
 pub mod ipc;
 pub mod keymap;
 pub mod labels;
+pub mod light_presets;
 pub mod lighting;
 pub mod pack;
 pub mod paths;

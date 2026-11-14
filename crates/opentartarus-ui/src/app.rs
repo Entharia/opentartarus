@@ -18,6 +18,8 @@ use opentartarus_core::constants::{
 };
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::{EventMethod, Method, WireError};
+use opentartarus_core::light_presets::preset_by_id;
+use opentartarus_core::lighting::{fill_row, solid_frame, FRAME_ROWS, HOME_ROW};
 use opentartarus_core::pack;
 use opentartarus_core::paths::Paths;
 use opentartarus_core::store;
@@ -131,6 +133,10 @@ pub enum Message {
     ToggleMenu,
     HoverKey(Option<KeyId>),
     LightingPreset([u8; 3]),
+    /// Picks which row of a custom frame the colour controls edit.
+    LightingRow(usize),
+    /// Replaces the custom frame with a preset's, by preset id.
+    LightFramePreset(&'static str),
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -225,6 +231,8 @@ pub struct App {
     pub menu_open: bool,
     pub hovered_key: Option<KeyId>,
     pub lighting_saved: bool,
+    /// The row of a custom frame that the colour controls edit.
+    pub lighting_row: usize,
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
@@ -256,6 +264,7 @@ impl Default for App {
                 effect: LightingEffect::None,
                 brightness: theme::DEFAULT_BRIGHTNESS,
                 color: None,
+                frame: None,
             },
             setup_note: None,
             selected_key: None,
@@ -270,6 +279,7 @@ impl Default for App {
             menu_open: false,
             hovered_key: None,
             lighting_saved: false,
+            lighting_row: HOME_ROW,
             new_profile_name: None,
             stick_mode: StickMode::default(),
             stick_rotation_deg: 0,
@@ -530,6 +540,10 @@ impl App {
                 if uses_color(effect) && self.lighting.color.is_none() {
                     self.lighting.color = Some(theme::DEFAULT_LIGHT_COLOR);
                 }
+                if effect == LightingEffect::Custom && self.lighting.frame.is_none() {
+                    let rgb = self.lighting.color.unwrap_or(theme::DEFAULT_LIGHT_COLOR);
+                    self.lighting.frame = Some(solid_frame(rgb));
+                }
                 self.send_lighting();
                 self.lighting_saved = true;
                 Task::none()
@@ -541,11 +555,11 @@ impl App {
                 Task::none()
             }
             Message::LightingColor(channel, value) => {
-                let mut rgb = self.lighting.color.unwrap_or(theme::DEFAULT_LIGHT_COLOR);
+                let mut rgb = self.edited_color();
                 if channel < 3 {
                     rgb[channel] = value;
                 }
-                self.lighting.color = Some(rgb);
+                self.set_edited_color(rgb);
                 self.send_lighting();
                 self.lighting_saved = true;
                 Task::none()
@@ -626,9 +640,22 @@ impl App {
                 Task::none()
             }
             Message::LightingPreset(rgb) => {
-                self.lighting.color = Some(rgb);
+                self.set_edited_color(rgb);
                 self.send_lighting();
                 self.lighting_saved = true;
+                Task::none()
+            }
+            Message::LightingRow(row) => {
+                self.lighting_row = row.min(FRAME_ROWS - 1);
+                Task::none()
+            }
+            Message::LightFramePreset(id) => {
+                if let Some(preset) = preset_by_id(id) {
+                    self.lighting.effect = LightingEffect::Custom;
+                    self.lighting.frame = Some(preset.frame());
+                    self.send_lighting();
+                    self.lighting_saved = true;
+                }
                 Task::none()
             }
             // The window has no system title bar, so the header does the work
@@ -938,6 +965,46 @@ impl App {
         }
     }
 
+    /// The colour the colour controls show: the selected row's for a custom
+    /// frame, else the plain colour.
+    pub fn edited_color(&self) -> [u8; 3] {
+        if self.lighting.effect == LightingEffect::Custom {
+            if let Some(rgb) = self
+                .lighting
+                .frame
+                .as_ref()
+                .and_then(|frame| frame.get(self.lighting_row))
+                .and_then(|row| row.first())
+            {
+                return *rgb;
+            }
+        }
+        self.lighting.color.unwrap_or(theme::DEFAULT_LIGHT_COLOR)
+    }
+
+    fn set_edited_color(&mut self, rgb: [u8; 3]) {
+        if self.lighting.effect == LightingEffect::Custom {
+            let frame = self.lighting.frame.get_or_insert_with(Vec::new);
+            fill_row(frame, self.lighting_row, rgb);
+        } else {
+            self.lighting.color = Some(rgb);
+        }
+    }
+
+    /// The effects the lighting tab offers. A custom frame needs a pad whose
+    /// LED grid is mapped, so it shows only on the V2 Pro, or when the profile
+    /// already has one.
+    pub fn offered_effects(&self) -> Vec<EffectChoice> {
+        LIGHTING_EFFECTS
+            .into_iter()
+            .filter(|choice| {
+                choice.0 != LightingEffect::Custom
+                    || self.model == Some(DeviceModel::V2Pro)
+                    || self.lighting.effect == LightingEffect::Custom
+            })
+            .collect()
+    }
+
     fn send_lighting(&self) {
         if let Some(profile_id) = self.profile_id() {
             self.send(
@@ -1154,7 +1221,7 @@ impl App {
             .into_iter()
             .filter_map(|id| by_id.remove(&id))
             .map(|r| ProfileRow {
-                color: read_profile(&r.id).and_then(|profile| profile.lighting.color),
+                color: read_profile(&r.id).and_then(|profile| profile.lighting.main_color()),
                 id: r.id,
                 name: r.name,
                 is_active: r.is_active,
@@ -1236,6 +1303,7 @@ pub fn effect_name(effect: LightingEffect) -> &'static str {
         LightingEffect::Reactive => "reactive",
         LightingEffect::Starlight => "starlight",
         LightingEffect::None => "none",
+        LightingEffect::Custom => "custom",
     }
 }
 
@@ -1273,13 +1341,14 @@ impl App {
     }
 }
 
-pub const LIGHTING_EFFECTS: [EffectChoice; 7] = [
+pub const LIGHTING_EFFECTS: [EffectChoice; 8] = [
     EffectChoice(LightingEffect::Static),
     EffectChoice(LightingEffect::Wave),
     EffectChoice(LightingEffect::Spectrum),
     EffectChoice(LightingEffect::Breath),
     EffectChoice(LightingEffect::Reactive),
     EffectChoice(LightingEffect::Starlight),
+    EffectChoice(LightingEffect::Custom),
     EffectChoice(LightingEffect::None),
 ];
 
@@ -1648,6 +1717,65 @@ mod tests {
         assert_eq!(app.hovered_key, Some(KeyId::Kp07));
         let _ = app.update(Message::HoverKey(None));
         assert_eq!(app.hovered_key, None);
+    }
+
+    #[test]
+    fn custom_effect_starts_from_the_current_colour_on_every_key() {
+        let mut app = App {
+            model: Some(DeviceModel::V2Pro),
+            ..App::default()
+        };
+        app.lighting.color = Some([10, 20, 30]);
+        let _ = app.update(Message::LightingEffect(EffectChoice(
+            LightingEffect::Custom,
+        )));
+        assert_eq!(app.lighting.frame, Some(solid_frame([10, 20, 30])));
+        assert!(app.lighting_saved);
+    }
+
+    #[test]
+    fn colour_controls_edit_only_the_picked_row_of_a_frame() {
+        let mut app = App::default();
+        app.lighting.effect = LightingEffect::Custom;
+        app.lighting.frame = Some(solid_frame([0, 0, 0]));
+        let _ = app.update(Message::LightingRow(1));
+        let _ = app.update(Message::LightingPreset([255, 0, 0]));
+        let _ = app.update(Message::LightingColor(2, 99));
+        let frame = app.lighting.frame.clone().unwrap();
+        assert!(frame[1].iter().all(|c| *c == [255, 0, 99]));
+        assert!(frame[0].iter().all(|c| *c == [0, 0, 0]));
+        assert_eq!(app.edited_color(), [255, 0, 99]);
+        assert_eq!(app.lighting.color, None, "the plain colour stays put");
+    }
+
+    #[test]
+    fn a_light_preset_switches_to_custom_with_its_frame() {
+        let mut app = App::default();
+        let _ = app.update(Message::LightFramePreset("wow-paladin"));
+        assert_eq!(app.lighting.effect, LightingEffect::Custom);
+        let paladin = preset_by_id("wow-paladin").unwrap();
+        assert_eq!(app.lighting.frame, Some(paladin.frame()));
+        let _ = app.update(Message::LightFramePreset("no-such-preset"));
+        assert_eq!(app.lighting.frame, Some(paladin.frame()));
+    }
+
+    #[test]
+    fn custom_is_offered_on_the_v2_pro_or_when_already_in_use() {
+        let has_custom = |app: &App| {
+            app.offered_effects()
+                .iter()
+                .any(|c| c.0 == LightingEffect::Custom)
+        };
+        let mut app = App {
+            model: Some(DeviceModel::V2),
+            ..App::default()
+        };
+        assert!(!has_custom(&app));
+        app.model = Some(DeviceModel::V2Pro);
+        assert!(has_custom(&app));
+        app.model = Some(DeviceModel::V2);
+        app.lighting.effect = LightingEffect::Custom;
+        assert!(has_custom(&app));
     }
 
     #[test]

@@ -1,8 +1,8 @@
-use opentartarus_core::constants::USB_VID_RAZER;
+use opentartarus_core::constants::{USB_PID_TARTARUS_V2_PRO, USB_VID_RAZER};
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::lighting::{
-    brightness_to_razer, openrazer_lighting_ready, should_request_openrazer_bus_name,
-    wave_sysfs_value, LightingClient,
+    brightness_to_razer, custom_frame_payload, openrazer_lighting_ready,
+    should_request_openrazer_bus_name, wave_sysfs_value, LightingClient,
 };
 use opentartarus_core::types::DeviceModel;
 use opentartarus_core::types::{Lighting, LightingEffect};
@@ -44,6 +44,7 @@ impl LightingClient for OpenRazerClient {
     fn apply(&mut self, lighting: &Lighting) -> Result<(), ErrorCode> {
         let vid = self.vid;
         let pid = self.pid;
+        let lighting = &frame_or_static(lighting, pid);
         let dbus_ok = off_tokio(|| {
             session_has_openrazer_blocking() && apply_via_dbus(lighting, vid, pid).is_ok()
         });
@@ -62,6 +63,21 @@ impl LightingClient for OpenRazerClient {
             session_has_openrazer()
         };
         openrazer_lighting_ready(daemon_owns_bus, tartarus_sysfs, 0)
+    }
+}
+
+/// Only the V2 Pro's LED grid is mapped to its keys. Another pad shows a
+/// custom frame as one static colour, the home row's.
+fn frame_or_static(lighting: &Lighting, pid: Option<u16>) -> Lighting {
+    let frame_ok = lighting.frame.is_some() && pid == Some(USB_PID_TARTARUS_V2_PRO);
+    if lighting.effect != LightingEffect::Custom || frame_ok {
+        return lighting.clone();
+    }
+    Lighting {
+        effect: LightingEffect::Static,
+        color: Some(lighting.main_color().unwrap_or(FALLBACK_RGB)),
+        frame: None,
+        ..lighting.clone()
     }
 }
 
@@ -215,6 +231,12 @@ fn apply_dbus_device(
                 &(rgb[0], rgb[1], rgb[2], EFFECT_SPEED),
             )?;
         }
+        LightingEffect::Custom => {
+            let frame = lighting.frame.as_ref().ok_or(ErrorCode::Lighting)?;
+            // `setKeyRow` is `ay`: the driver's frame bytes, all rows at once.
+            dbus_chroma(conn, path, "setKeyRow", &(custom_frame_payload(frame),))?;
+            dbus_chroma(conn, path, "setCustom", &())?;
+        }
     }
     conn.call_method(
         Some(OPENRAZER_BUS_NAME),
@@ -271,6 +293,13 @@ fn apply_via_sysfs(
             "matrix_effect_starlight",
             &[EFFECT_SPEED, rgb[0], rgb[1], rgb[2]],
         ),
+        LightingEffect::Custom => match &lighting.frame {
+            Some(frame) => {
+                write_sysfs(&node, "matrix_custom_frame", &custom_frame_payload(frame))
+                    && write_sysfs(&node, "matrix_effect_custom", b"1")
+            }
+            None => false,
+        },
     };
     let brightness = brightness_to_razer(lighting.brightness).to_string();
     let bright_ok = write_sysfs(&node, "matrix_brightness", brightness.as_bytes());
@@ -347,6 +376,27 @@ mod tests {
         ));
         assert_eq!(OPENRAZER_BUS_NAME, "org.razer");
         assert!(!should_request_openrazer_bus_name());
+    }
+
+    #[test]
+    fn custom_frames_go_static_on_pads_without_a_mapped_grid() {
+        use opentartarus_core::lighting::{fill_row, solid_frame, HOME_ROW};
+        let mut frame = solid_frame([1, 1, 1]);
+        fill_row(&mut frame, HOME_ROW, [200, 10, 20]);
+        let custom = Lighting {
+            effect: LightingEffect::Custom,
+            brightness: 70,
+            color: None,
+            frame: Some(frame),
+        };
+        let kept = frame_or_static(&custom, Some(USB_PID_TARTARUS_V2_PRO));
+        assert_eq!(kept, custom);
+        let flat = frame_or_static(&custom, Some(USB_PID_TARTARUS_V2));
+        assert_eq!(flat.effect, LightingEffect::Static);
+        assert_eq!(flat.color, Some([200, 10, 20]));
+        assert_eq!(flat.brightness, 70);
+        let unknown = frame_or_static(&custom, None);
+        assert_eq!(unknown.effect, LightingEffect::Static);
     }
 
     #[test]

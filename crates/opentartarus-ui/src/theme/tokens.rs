@@ -108,6 +108,12 @@ pub const SWITCH_WIDTH: f32 = 38.0;
 pub const SWITCH_HEIGHT: f32 = 22.0;
 pub const EFFECT_SWATCH_HEIGHT: f32 = 26.0;
 pub const EFFECT_GRID_COLUMNS: usize = 4;
+pub const PRESET_GRID_COLUMNS: usize = 4;
+/// Key height in the lighting tab's row picker.
+pub const FRAME_KEY_HEIGHT: f32 = 20.0;
+/// Row height and gap in the small frame pictures on cards.
+pub const PRESET_THUMB_ROW_HEIGHT: f32 = 7.0;
+pub const FRAME_THUMB_GAP: f32 = 2.0;
 pub const BORDER_NONE: f32 = 0.0;
 pub const BORDER_HAIRLINE: f32 = 1.0;
 pub const BORDER_SELECTED: f32 = 2.0;
