@@ -403,6 +403,7 @@ pub fn layer_note(layer: Layer, key_id: KeyId, action: Option<&Action>) -> Optio
 
 pub fn inspector(app: &App) -> Element<'_, Message> {
     let content: Element<'_, Message> = match app.selected_key {
+        _ if app.tab == crate::app::Tab::Lighting => crate::view::lighting_tab::presets_panel(app),
         None => empty_state(app),
         Some(key_id) => {
             let action = app.selected_action();

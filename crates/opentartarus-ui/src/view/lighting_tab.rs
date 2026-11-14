@@ -1,14 +1,17 @@
-use crate::app::{uses_color, App, Message, Phase};
+use crate::app::{uses_color, App, EffectChoice, Message, Phase};
+use crate::light_pad::{self, LightPad};
 use crate::theme;
 use crate::view::widgets::{
-    card_container, quiet_button, row_button, section_label, selected_effect_button,
+    card_container, dot, quiet_button, row_button, section_label, selected_effect_button,
     selected_row_button, swatch,
 };
 use iced::widget::{button, column, container, row, scrollable, slider, text, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
-use opentartarus_core::light_presets::{preset_for_frame, LightPreset, PresetGroup, PRESETS};
-use opentartarus_core::lighting::FRAME_ROWS;
-use opentartarus_core::types::{LightFrame, LightingEffect};
+use opentartarus_core::light_presets::{
+    preset_by_id, preset_for_frame, LightPreset, PresetGroup, PRESETS,
+};
+use opentartarus_core::lighting::{solid_frame, FRAME_ROWS};
+use opentartarus_core::types::{DeviceModel, LightFrame, LightingEffect};
 
 const BREATH_PREVIEW_ALPHA: f32 = 0.5;
 const WAVE_PREVIEW: [u8; 3] = [0x00, 0xb4, 0xff];
@@ -27,19 +30,22 @@ const ROW_KEY_UNITS: [&[u16]; FRAME_ROWS] = [
 ];
 const ROW_UNITS: u16 = 7;
 const UNLIT: [u8; 3] = [0, 0, 0];
+/// What the pad shows for the effects that cycle through colours.
+const CYCLING_PREVIEW_PRESET: &str = "prism";
+const CHANNEL_NAMES: [&str; 3] = ["R", "G", "B"];
 
 /// Lighting is only editable once the daemon is up and a backend answered.
 pub fn lighting_is_editable(app: &App) -> bool {
     app.phase == Phase::Running && app.openrazer
 }
 
-/// The preview colour on an effect card. Colour-driven effects show the chosen
-/// colour; the rest get a fixed hint so each card is distinguishable.
+/// The dot on an effect chip. Colour-driven effects show the chosen colour;
+/// the rest get a fixed hint so each chip is distinguishable.
 pub fn effect_swatch_color(effect: LightingEffect, current: Option<[u8; 3]>) -> Color {
     let chosen = current.unwrap_or(theme::DEFAULT_LIGHT_COLOR);
     let chosen = Color::from_rgb8(chosen[0], chosen[1], chosen[2]);
     match effect {
-        LightingEffect::Static => chosen,
+        LightingEffect::Static | LightingEffect::Custom => chosen,
         LightingEffect::Breath => Color {
             a: BREATH_PREVIEW_ALPHA,
             ..chosen
@@ -61,9 +67,31 @@ pub fn effect_swatch_color(effect: LightingEffect, current: Option<[u8; 3]>) -> 
             SPECTRUM_PREVIEW[2],
         ),
         LightingEffect::None => theme::COLOR_BACKGROUND,
-        // The card draws the frame itself; this is its fallback colour.
-        LightingEffect::Custom => chosen,
     }
+}
+
+/// What every LED shows for the current effect, for the pad picture.
+pub fn preview_frame(app: &App) -> LightFrame {
+    let lighting = &app.lighting;
+    match lighting.effect {
+        LightingEffect::Custom => lighting.frame.clone().unwrap_or_default(),
+        LightingEffect::Wave | LightingEffect::Spectrum => preset_by_id(CYCLING_PREVIEW_PRESET)
+            .map(LightPreset::frame)
+            .unwrap_or_default(),
+        LightingEffect::None => solid_frame(UNLIT),
+        LightingEffect::Static
+        | LightingEffect::Breath
+        | LightingEffect::Reactive
+        | LightingEffect::Starlight => {
+            solid_frame(lighting.color.unwrap_or(theme::DEFAULT_LIGHT_COLOR))
+        }
+    }
+}
+
+fn offers_custom(app: &App) -> bool {
+    app.offered_effects()
+        .iter()
+        .any(|choice| choice.0 == LightingEffect::Custom)
 }
 
 fn rgb_color(rgb: [u8; 3]) -> Color {
@@ -78,218 +106,179 @@ fn cell_rgb(frame: &LightFrame, row: usize, column: usize) -> [u8; 3] {
         .unwrap_or(UNLIT)
 }
 
-fn cell<'a>(rgb: [u8; 3], units: u16, height: f32, radius: f32) -> Element<'a, Message> {
-    let color = rgb_color(rgb);
+fn cell<'a>(rgb: [u8; 3], units: u16, height: f32) -> Element<'a, Message> {
+    let color = if rgb == UNLIT {
+        theme::COLOR_KEY_UNBOUND
+    } else {
+        rgb_color(rgb)
+    };
     container(Space::new(Length::Fill, Length::Fixed(height)))
         .width(Length::FillPortion(units))
         .style(move |_theme: &Theme| container::Style {
             background: Some(Background::Color(color)),
             border: Border {
-                color: theme::COLOR_LINE_STRONG,
-                width: theme::BORDER_HAIRLINE,
-                radius: radius.into(),
+                radius: (height / 3.0).into(),
+                ..Border::default()
             },
             ..container::Style::default()
         })
         .into()
 }
 
-/// One row of the pad drawn in its frame colours, keys at their widths.
-fn frame_row<'a>(frame: &LightFrame, row: usize, height: f32, gap: f32) -> Element<'a, Message> {
-    let mut line = iced::widget::Row::new().spacing(gap);
-    let mut used = 0;
-    for (column, units) in ROW_KEY_UNITS[row].iter().enumerate() {
-        line = line.push(cell(
-            cell_rgb(frame, row, column),
-            *units,
-            height,
-            height / 3.0,
-        ));
-        used += units;
+/// A small picture of a whole frame, keys at their widths, for preset rows.
+fn frame_thumbnail<'a>(frame: &LightFrame) -> Element<'a, Message> {
+    let gap = theme::PRESET_THUMB_GAP;
+    let mut grid = column![].spacing(gap);
+    for (row, units) in ROW_KEY_UNITS.iter().enumerate() {
+        let mut line = iced::widget::Row::new().spacing(gap);
+        let mut used = 0;
+        for (column, width) in units.iter().enumerate() {
+            line = line.push(cell(
+                cell_rgb(frame, row, column),
+                *width,
+                theme::PRESET_THUMB_ROW_HEIGHT,
+            ));
+            used += width;
+        }
+        if used < ROW_UNITS {
+            line = line.push(Space::with_width(Length::FillPortion(ROW_UNITS - used)));
+        }
+        grid = grid.push(line);
     }
-    if used < ROW_UNITS {
-        line = line.push(Space::with_width(Length::FillPortion(ROW_UNITS - used)));
-    }
-    line.into()
+    container(grid)
+        .width(Length::Fixed(theme::PRESET_THUMB_WIDTH))
+        .into()
 }
 
-/// A small picture of a whole frame, for effect and preset cards.
-fn frame_thumbnail<'a>(frame: &LightFrame, height: f32) -> Element<'a, Message> {
-    let mut grid = column![].spacing(theme::FRAME_THUMB_GAP);
-    for row in 0..FRAME_ROWS {
-        grid = grid.push(frame_row(frame, row, height, theme::FRAME_THUMB_GAP));
-    }
-    grid.into()
-}
-
-fn effect_card(app: &App, effect: LightingEffect) -> Element<'_, Message> {
+fn effect_chip(app: &App, choice: EffectChoice) -> Element<'_, Message> {
+    let effect = choice.0;
     let selected = app.lighting.effect == effect;
-    let preview = effect_swatch_color(effect, app.lighting.color);
-    let picture: Element<'_, Message> = match (effect, &app.lighting.frame) {
-        (LightingEffect::Custom, Some(frame)) => container(frame_thumbnail(
-            frame,
-            (theme::EFFECT_SWATCH_HEIGHT - theme::FRAME_THUMB_GAP * 4.0) / FRAME_ROWS as f32,
-        ))
-        .height(Length::Fixed(theme::EFFECT_SWATCH_HEIGHT))
-        .into(),
-        _ => container(Space::new(
-            Length::Fill,
-            Length::Fixed(theme::EFFECT_SWATCH_HEIGHT),
-        ))
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(Background::Color(preview)),
-            border: Border {
-                color: theme::COLOR_LINE_STRONG,
-                width: theme::BORDER_HAIRLINE,
-                radius: theme::RADIUS_CONTROL.into(),
-            },
-            ..container::Style::default()
-        })
-        .into(),
-    };
-    let card = column![
-        picture,
+    let color = effect_swatch_color(effect, app.lighting.main_color());
+    let label = row![
+        dot(color),
         text(crate::app::effect_name(effect)).size(theme::TEXT_SMALL),
     ]
     .spacing(theme::SPACE_SM)
-    .align_x(Alignment::Center);
-
+    .align_y(Alignment::Center);
     let style = if selected {
         selected_effect_button
     } else {
         quiet_button
     };
-    button(card)
+    button(container(label).center_x(Length::Fill))
         .width(Length::Fill)
-        .padding(theme::SPACE_SM)
-        .on_press(Message::LightingEffect(crate::app::EffectChoice(effect)))
+        .padding([theme::SPACE_SM, theme::SPACE_MD])
+        .on_press(Message::LightingEffect(choice))
         .style(style)
         .into()
 }
 
-fn effect_grid(app: &App) -> Element<'_, Message> {
+fn effect_chips(app: &App) -> Element<'_, Message> {
     let mut grid = column![].spacing(theme::SPACE_SM);
     for chunk in app.offered_effects().chunks(theme::EFFECT_GRID_COLUMNS) {
         let mut line = row![].spacing(theme::SPACE_SM);
         for choice in chunk {
-            line = line.push(effect_card(app, choice.0));
+            line = line.push(effect_chip(app, *choice));
         }
-        // Keep the last row's cards the same width as a full row's.
+        // Keep the last row's chips the same width as a full row's.
         for _ in chunk.len()..theme::EFFECT_GRID_COLUMNS {
             line = line.push(Space::with_width(Length::Fill));
         }
         grid = grid.push(line);
     }
-    grid.into()
-}
-
-fn color_row(app: &App) -> Element<'_, Message> {
-    let mut presets = row![].spacing(theme::SPACE_SM).align_y(Alignment::Center);
-    for rgb in theme::LIGHTING_PRESETS {
-        presets = presets.push(
-            button(swatch(rgb, theme::PRESET_SWATCH_SIZE))
-                .padding(0)
-                .on_press(Message::LightingPreset(rgb))
-                .style(quiet_button),
-        );
-    }
-    let rgb = app.edited_color();
-    let channels = row![
-        slider(0..=theme::COLOR_CHANNEL_MAX, rgb[0], |v| {
-            Message::LightingColor(0, v)
-        }),
-        slider(0..=theme::COLOR_CHANNEL_MAX, rgb[1], |v| {
-            Message::LightingColor(1, v)
-        }),
-        slider(0..=theme::COLOR_CHANNEL_MAX, rgb[2], |v| {
-            Message::LightingColor(2, v)
-        }),
-    ]
-    .spacing(theme::SPACE_SM);
-
-    column![section_label(theme::LABEL_COLOR), presets, channels,]
+    column![section_label(theme::LABEL_EFFECT), grid]
         .spacing(theme::SPACE_SM)
         .into()
 }
 
-/// The pad in its frame colours. Clicking a row picks it for the colour
-/// controls below.
-fn row_picker(app: &App) -> Element<'_, Message> {
-    let empty = Vec::new();
-    let frame = app.lighting.frame.as_ref().unwrap_or(&empty);
-    let mut rows = column![].spacing(theme::SPACE_XS);
-    for row in 0..FRAME_ROWS {
-        let style = if row == app.lighting_row {
-            selected_row_button
-        } else {
-            row_button
-        };
-        rows = rows.push(
-            button(frame_row(
-                frame,
-                row,
-                theme::FRAME_KEY_HEIGHT,
-                theme::SPACE_XS,
-            ))
-            .width(Length::Fill)
-            .padding(theme::SPACE_XS)
-            .on_press(Message::LightingRow(row))
-            .style(style),
-        );
-    }
-    column![
-        section_label(theme::LABEL_ROWS),
-        text(theme::ROWS_HINT)
+/// A label on the left with its value on the right, above a control.
+fn labelled<'a>(label: String, value: String) -> Element<'a, Message> {
+    row![
+        section_label(label),
+        Space::with_width(Length::Fill),
+        text(value)
             .size(theme::TEXT_SMALL)
-            .color(theme::COLOR_TEXT_FAINT),
-        rows,
+            .color(theme::COLOR_TEXT_DIM),
+    ]
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn brightness_control(app: &App) -> Element<'_, Message> {
+    column![
+        labelled(
+            theme::LABEL_BRIGHTNESS.to_string(),
+            format!("{}{}", app.lighting.brightness, PERCENT_SUFFIX),
+        ),
+        slider(
+            theme::BRIGHTNESS_MIN..=theme::BRIGHTNESS_MAX,
+            app.lighting.brightness,
+            Message::LightingBrightness,
+        ),
     ]
     .spacing(theme::SPACE_SM)
     .into()
 }
 
-fn preset_card(preset: &'static LightPreset, selected: bool) -> Element<'static, Message> {
-    let card = column![
-        frame_thumbnail(&preset.frame(), theme::PRESET_THUMB_ROW_HEIGHT),
-        text(preset.name).size(theme::TEXT_SMALL),
-    ]
-    .spacing(theme::SPACE_XS)
-    .align_x(Alignment::Center);
-    let style = if selected {
-        selected_effect_button
+fn color_control(app: &App) -> Element<'_, Message> {
+    let rgb = app.edited_color();
+    let label = if app.lighting.effect == LightingEffect::Custom {
+        format!("{}{}", theme::LABEL_ROW_COLOR_PREFIX, app.lighting_row + 1)
     } else {
-        quiet_button
+        theme::LABEL_COLOR.to_string()
     };
-    button(card)
-        .width(Length::Fill)
-        .padding(theme::SPACE_SM)
-        .on_press(Message::LightFramePreset(preset.id))
-        .style(style)
-        .into()
+    let hex = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+
+    let mut presets = row![].spacing(theme::SPACE_SM).align_y(Alignment::Center);
+    for preset in theme::LIGHTING_PRESETS {
+        presets = presets.push(
+            button(swatch(preset, theme::PRESET_SWATCH_SIZE))
+                .padding(0)
+                .on_press(Message::LightingPreset(preset))
+                .style(quiet_button),
+        );
+    }
+    let mut channels = column![].spacing(theme::SPACE_XS);
+    for (channel, name) in CHANNEL_NAMES.iter().enumerate() {
+        channels = channels.push(
+            row![
+                text(*name)
+                    .size(theme::TEXT_SMALL)
+                    .color(theme::COLOR_TEXT_FAINT)
+                    .width(Length::Fixed(theme::CHANNEL_LABEL_WIDTH)),
+                slider(0..=theme::COLOR_CHANNEL_MAX, rgb[channel], move |v| {
+                    Message::LightingColor(channel, v)
+                }),
+                text(rgb[channel].to_string())
+                    .size(theme::TEXT_SMALL)
+                    .color(theme::COLOR_TEXT_DIM)
+                    .width(Length::Fixed(theme::CHANNEL_VALUE_WIDTH))
+                    .align_x(Alignment::End),
+            ]
+            .spacing(theme::SPACE_SM)
+            .align_y(Alignment::Center),
+        );
+    }
+
+    column![
+        labelled(label, hex),
+        row![
+            swatch(rgb, theme::CURRENT_SWATCH_SIZE),
+            column![presets, channels].spacing(theme::SPACE_SM),
+        ]
+        .spacing(theme::SPACE_MD)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(theme::SPACE_SM)
+    .into()
 }
 
-/// Every preset, under its group's name.
-fn preset_gallery(app: &App) -> Element<'_, Message> {
-    let current = app.lighting.frame.as_ref().and_then(preset_for_frame);
-    let mut gallery = column![].spacing(theme::SPACE_MD);
-    for group in PresetGroup::ALL {
-        let presets: Vec<&'static LightPreset> =
-            PRESETS.iter().filter(|p| p.group == group).collect();
-        let mut grid = column![].spacing(theme::SPACE_SM);
-        for chunk in presets.chunks(theme::PRESET_GRID_COLUMNS) {
-            let mut line = row![].spacing(theme::SPACE_SM);
-            for preset in chunk {
-                let selected = current.is_some_and(|c| c.id == preset.id);
-                line = line.push(preset_card(preset, selected));
-            }
-            for _ in chunk.len()..theme::PRESET_GRID_COLUMNS {
-                line = line.push(Space::with_width(Length::Fill));
-            }
-            grid = grid.push(line);
-        }
-        gallery = gallery.push(column![section_label(group.name()), grid].spacing(theme::SPACE_SM));
+fn pad_hint(app: &App) -> &'static str {
+    if app.lighting.effect == LightingEffect::Custom {
+        theme::PAD_HINT_CUSTOM
+    } else {
+        theme::PAD_HINT_PICK_ROW
     }
-    gallery.into()
 }
 
 pub fn lighting_tab(app: &App) -> Element<'_, Message> {
@@ -307,40 +296,41 @@ pub fn lighting_tab(app: &App) -> Element<'_, Message> {
     } else if !lighting_is_editable(app) {
         Space::with_height(Length::Fill).into()
     } else {
-        let brightness_label = format!(
-            "{} {}{}",
-            theme::LABEL_BRIGHTNESS,
-            app.lighting.brightness,
-            PERCENT_SUFFIX
+        let custom = app.lighting.effect == LightingEffect::Custom;
+        let pad = light_pad::widget(
+            LightPad {
+                model: app.model,
+                frame: preview_frame(app),
+                brightness: app.lighting.brightness,
+                selected_row: custom.then_some(app.lighting_row),
+                rows_pickable: offers_custom(app),
+            },
+            theme::LIGHT_PAD_HEIGHT,
         );
-        let mut panel = column![
-            section_label(theme::LABEL_EFFECT),
-            effect_grid(app),
-            section_label(&brightness_label),
-            slider(
-                theme::BRIGHTNESS_MIN..=theme::BRIGHTNESS_MAX,
-                app.lighting.brightness,
-                Message::LightingBrightness,
-            ),
-        ]
-        .spacing(theme::SPACE_MD);
-        if uses_color(app.lighting.effect) {
-            panel = panel.push(color_row(app));
+        let mut top = column![pad]
+            .spacing(theme::SPACE_SM)
+            .align_x(Alignment::Center);
+        if app.model == Some(DeviceModel::V2Pro) {
+            top = top.push(
+                text(pad_hint(app))
+                    .size(theme::TEXT_SMALL)
+                    .color(theme::COLOR_TEXT_FAINT),
+            );
         }
-        if app.lighting.effect == LightingEffect::Custom {
-            panel = panel.push(row_picker(app)).push(color_row(app));
+
+        let mut controls = column![effect_chips(app), brightness_control(app)]
+            .spacing(theme::SPACE_XL)
+            .max_width(theme::LIGHTING_CONTROLS_WIDTH);
+        if uses_color(app.lighting.effect) || custom {
+            controls = controls.push(color_control(app));
         }
-        if app
-            .offered_effects()
-            .iter()
-            .any(|c| c.0 == LightingEffect::Custom)
-        {
-            panel = panel
-                .push(section_label(theme::LABEL_PRESETS))
-                .push(preset_gallery(app));
-        }
+
+        let page = column![top, controls]
+            .spacing(theme::SPACE_XL)
+            .width(Length::Fill)
+            .align_x(Alignment::Center);
         // Room on the right so the scrollbar doesn't cover the controls.
-        scrollable(container(panel).padding(iced::Padding::ZERO.right(theme::SPACE_MD)))
+        scrollable(container(page).padding(iced::Padding::ZERO.right(theme::SPACE_MD)))
             .height(Length::Fill)
             .into()
     };
@@ -351,6 +341,104 @@ pub fn lighting_tab(app: &App) -> Element<'_, Message> {
         .padding(theme::SPACE_XL)
         .style(card_container)
         .into()
+}
+
+fn group_label(group: PresetGroup) -> &'static str {
+    match group {
+        PresetGroup::WorldOfWarcraft => theme::PRESET_GROUP_WOW,
+        PresetGroup::Games => theme::PRESET_GROUP_GAMES,
+        PresetGroup::Aesthetic => theme::PRESET_GROUP_AESTHETIC,
+        PresetGroup::Functional => theme::PRESET_GROUP_FUNCTIONAL,
+    }
+}
+
+fn group_caption(group: PresetGroup) -> &'static str {
+    match group {
+        PresetGroup::WorldOfWarcraft => theme::PRESET_CAPTION_WOW,
+        PresetGroup::Games => theme::PRESET_CAPTION_GAMES,
+        PresetGroup::Aesthetic => theme::PRESET_CAPTION_AESTHETIC,
+        PresetGroup::Functional => theme::PRESET_CAPTION_FUNCTIONAL,
+    }
+}
+
+fn group_chips(app: &App) -> Element<'_, Message> {
+    let mut grid = column![].spacing(theme::SPACE_XS);
+    for pair in PresetGroup::ALL.chunks(2) {
+        let mut line = row![].spacing(theme::SPACE_XS);
+        for group in pair {
+            let style = if app.preset_group == *group {
+                selected_effect_button
+            } else {
+                quiet_button
+            };
+            line = line.push(
+                button(
+                    container(text(group_label(*group)).size(theme::TEXT_SMALL))
+                        .center_x(Length::Fill),
+                )
+                .width(Length::Fill)
+                .padding([theme::SPACE_XS, theme::SPACE_SM])
+                .on_press(Message::PresetGroupPick(*group))
+                .style(style),
+            );
+        }
+        grid = grid.push(line);
+    }
+    grid.into()
+}
+
+fn preset_row(preset: &'static LightPreset, selected: bool) -> Element<'static, Message> {
+    let style = if selected {
+        selected_row_button
+    } else {
+        row_button
+    };
+    button(
+        row![
+            frame_thumbnail(&preset.frame()),
+            text(preset.name).size(theme::TEXT_BODY),
+        ]
+        .spacing(theme::SPACE_MD)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([theme::SPACE_SM, theme::SPACE_SM])
+    .on_press(Message::LightFramePreset(preset.id))
+    .style(style)
+    .into()
+}
+
+/// The right-hand panel on the lighting tab: presets, one group at a time.
+pub fn presets_panel(app: &App) -> Element<'_, Message> {
+    let title = text(theme::LABEL_PRESETS).size(theme::TEXT_TITLE);
+    if !lighting_is_editable(app) || !offers_custom(app) {
+        return column![
+            title,
+            text(theme::PRESETS_NEED_V2_PRO)
+                .size(theme::TEXT_SMALL)
+                .color(theme::COLOR_TEXT_FAINT),
+        ]
+        .spacing(theme::SPACE_SM)
+        .into();
+    }
+    let current = app.lighting.frame.as_ref().and_then(preset_for_frame);
+    let mut list = column![].spacing(theme::SPACE_XXS);
+    for preset in PRESETS.iter().filter(|p| p.group == app.preset_group) {
+        let selected = app.lighting.effect == LightingEffect::Custom
+            && current.is_some_and(|c| c.id == preset.id);
+        list = list.push(preset_row(preset, selected));
+    }
+    column![
+        title,
+        group_chips(app),
+        text(group_caption(app.preset_group))
+            .size(theme::TEXT_SMALL)
+            .color(theme::COLOR_TEXT_FAINT),
+        scrollable(container(list).padding(iced::Padding::ZERO.right(theme::SPACE_MD)))
+            .height(Length::Fill),
+    ]
+    .spacing(theme::SPACE_MD)
+    .into()
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ pub mod app;
 pub mod client;
 pub mod keypad;
 pub mod keys;
+pub mod light_pad;
 pub mod theme;
 pub mod view;
 

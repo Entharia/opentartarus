@@ -18,7 +18,7 @@ use opentartarus_core::constants::{
 };
 use opentartarus_core::error::ErrorCode;
 use opentartarus_core::ipc::{EventMethod, Method, WireError};
-use opentartarus_core::light_presets::preset_by_id;
+use opentartarus_core::light_presets::{preset_by_id, PresetGroup};
 use opentartarus_core::lighting::{fill_row, solid_frame, FRAME_ROWS, HOME_ROW};
 use opentartarus_core::pack;
 use opentartarus_core::paths::Paths;
@@ -137,6 +137,8 @@ pub enum Message {
     LightingRow(usize),
     /// Replaces the custom frame with a preset's, by preset id.
     LightFramePreset(&'static str),
+    /// Shows one group of presets in the lighting tab's side panel.
+    PresetGroupPick(PresetGroup),
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -233,6 +235,8 @@ pub struct App {
     pub lighting_saved: bool,
     /// The row of a custom frame that the colour controls edit.
     pub lighting_row: usize,
+    /// The preset group the lighting tab's side panel lists.
+    pub preset_group: PresetGroup,
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
@@ -280,6 +284,7 @@ impl Default for App {
             hovered_key: None,
             lighting_saved: false,
             lighting_row: HOME_ROW,
+            preset_group: PresetGroup::WorldOfWarcraft,
             new_profile_name: None,
             stick_mode: StickMode::default(),
             stick_rotation_deg: 0,
@@ -647,6 +652,21 @@ impl App {
             }
             Message::LightingRow(row) => {
                 self.lighting_row = row.min(FRAME_ROWS - 1);
+                // Picking a row on a pad lit in one colour starts a custom
+                // frame in that colour, so the row can then take its own.
+                if self.lighting.effect != LightingEffect::Custom
+                    && self
+                        .offered_effects()
+                        .contains(&EffectChoice(LightingEffect::Custom))
+                {
+                    return self.update(Message::LightingEffect(EffectChoice(
+                        LightingEffect::Custom,
+                    )));
+                }
+                Task::none()
+            }
+            Message::PresetGroupPick(group) => {
+                self.preset_group = group;
                 Task::none()
             }
             Message::LightFramePreset(id) => {

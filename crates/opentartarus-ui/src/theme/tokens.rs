@@ -106,14 +106,17 @@ pub const SWATCH_SIZE: f32 = 9.0;
 pub const PRESET_SWATCH_SIZE: f32 = 30.0;
 pub const SWITCH_WIDTH: f32 = 38.0;
 pub const SWITCH_HEIGHT: f32 = 22.0;
-pub const EFFECT_SWATCH_HEIGHT: f32 = 26.0;
 pub const EFFECT_GRID_COLUMNS: usize = 4;
-pub const PRESET_GRID_COLUMNS: usize = 4;
-/// Key height in the lighting tab's row picker.
-pub const FRAME_KEY_HEIGHT: f32 = 20.0;
-/// Row height and gap in the small frame pictures on cards.
-pub const PRESET_THUMB_ROW_HEIGHT: f32 = 7.0;
-pub const FRAME_THUMB_GAP: f32 = 2.0;
+/// The pad picture on the lighting tab, and the column of controls under it.
+pub const LIGHT_PAD_HEIGHT: f32 = 300.0;
+pub const LIGHTING_CONTROLS_WIDTH: f32 = 520.0;
+pub const CURRENT_SWATCH_SIZE: f32 = 64.0;
+pub const CHANNEL_LABEL_WIDTH: f32 = 12.0;
+pub const CHANNEL_VALUE_WIDTH: f32 = 28.0;
+/// The small pad pictures in the preset list.
+pub const PRESET_THUMB_WIDTH: f32 = 52.0;
+pub const PRESET_THUMB_ROW_HEIGHT: f32 = 5.0;
+pub const PRESET_THUMB_GAP: f32 = 1.5;
 pub const BORDER_NONE: f32 = 0.0;
 pub const BORDER_HAIRLINE: f32 = 1.0;
 pub const BORDER_SELECTED: f32 = 2.0;

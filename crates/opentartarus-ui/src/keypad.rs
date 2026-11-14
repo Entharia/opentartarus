@@ -64,7 +64,7 @@ fn key_number(id: KeyId, model: Option<DeviceModel>) -> Option<String> {
         .or_else(|| (id == KeyId::Kp20).then(|| String::from("20")))
 }
 
-fn corner_for(id: KeyId, model: Option<DeviceModel>) -> f32 {
+pub(crate) fn corner_for(id: KeyId, model: Option<DeviceModel>) -> f32 {
     if model == Some(DeviceModel::V2Pro) {
         return if id.is_stick() {
             CORNER_DPAD
@@ -462,7 +462,7 @@ fn v2_pro_rects(size: Size) -> Vec<(KeyId, Rectangle)> {
     out
 }
 
-fn key_rects(size: Size, model: Option<DeviceModel>) -> Vec<(KeyId, Rectangle)> {
+pub(crate) fn key_rects(size: Size, model: Option<DeviceModel>) -> Vec<(KeyId, Rectangle)> {
     if model == Some(DeviceModel::V2Pro) {
         return v2_pro_rects(size);
     }
