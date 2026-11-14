@@ -13,6 +13,9 @@ use iced::mouse;
 use iced::widget::text_input;
 use iced::window::{self, Mode};
 use iced::{event, Event, Subscription, Task, Theme};
+use opentartarus_core::animation::{
+    Animation, AnimationKind, FRAME_INTERVAL_MS, SPEED_MAX, SPEED_MIN,
+};
 use opentartarus_core::constants::{
     HOLD_REPEAT_RATE_DEFAULT_MS, MACRO_MAX_DELAY_MS, MACRO_MAX_STEPS, RECORD_TIMEOUT_MS,
     STICK_ROTATION_MAX_DEG,
@@ -159,6 +162,11 @@ pub enum Message {
     /// Typing in the hex box. A complete code applies at once.
     HexDraftChanged(String),
     SubmitHex,
+    /// Sets or clears the custom frame's animation.
+    LightingAnimation(Option<AnimationKind>),
+    LightingSpeed(u8),
+    /// Moves the lighting tab's animation preview on.
+    AnimationTick(std::time::Instant),
     DragWindow,
     MinimizeWindow,
     ToggleMaximize,
@@ -271,6 +279,9 @@ pub struct App {
     pub hex_draft: Option<String>,
     /// The hex code last copied, so the button can say so.
     pub copied_hex: Option<String>,
+    /// When the animation preview started, and how far it has run.
+    pub preview_origin: std::time::Instant,
+    pub preview_time: f32,
     /// `Some` while the inline name box at the bottom of the profile list is
     /// open; the text is what has been typed so far.
     pub new_profile_name: Option<String>,
@@ -303,6 +314,7 @@ impl Default for App {
                 brightness: theme::DEFAULT_BRIGHTNESS,
                 color: None,
                 frame: None,
+                animation: None,
             },
             setup_note: None,
             selected_key: None,
@@ -325,6 +337,8 @@ impl Default for App {
             save_preset_name: None,
             hex_draft: None,
             copied_hex: None,
+            preview_origin: std::time::Instant::now(),
+            preview_time: 0.0,
             new_profile_name: None,
             stick_mode: StickMode::default(),
             stick_rotation_deg: 0,
@@ -345,6 +359,12 @@ impl App {
         Subscription::batch([
             client::subscription(),
             window::close_requests().map(Message::CloseRequested),
+            if self.previews_animation() {
+                iced::time::every(std::time::Duration::from_millis(FRAME_INTERVAL_MS))
+                    .map(Message::AnimationTick)
+            } else {
+                Subscription::none()
+            },
             event::listen_with(|event, _status, _id| match event {
                 Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                     Some(Message::ComboKey { key, modifiers })
@@ -750,7 +770,11 @@ impl App {
                 let (Some(name), Some(frame)) = (name, self.lighting.frame.clone()) else {
                     return Task::none();
                 };
-                let preset = SavedPreset { name, frame };
+                let preset = SavedPreset {
+                    name,
+                    frame,
+                    animation: self.lighting.animation,
+                };
                 let presets = std::mem::take(&mut self.saved_presets);
                 self.saved_presets = with_saved(presets, preset);
                 self.save_preset_name = None;
@@ -766,6 +790,7 @@ impl App {
                 if let Some(preset) = self.saved_presets.get(index) {
                     self.lighting.effect = LightingEffect::Custom;
                     self.lighting.frame = Some(preset.frame.clone());
+                    self.lighting.animation = preset.animation;
                     self.send_lighting();
                     self.lighting_saved = true;
                 }
@@ -792,6 +817,30 @@ impl App {
                     self.lighting_saved = true;
                 }
                 self.hex_draft = None;
+                Task::none()
+            }
+            Message::LightingAnimation(kind) => {
+                let speed = self
+                    .lighting
+                    .animation
+                    .map_or(opentartarus_core::animation::SPEED_DEFAULT, |a| a.speed);
+                self.lighting.animation = kind.map(|kind| Animation { kind, speed });
+                self.preview_origin = std::time::Instant::now();
+                self.preview_time = 0.0;
+                self.send_lighting();
+                self.lighting_saved = true;
+                Task::none()
+            }
+            Message::LightingSpeed(speed) => {
+                if let Some(animation) = self.lighting.animation.as_mut() {
+                    animation.speed = speed.clamp(SPEED_MIN, SPEED_MAX);
+                    self.send_lighting();
+                    self.lighting_saved = true;
+                }
+                Task::none()
+            }
+            Message::AnimationTick(now) => {
+                self.preview_time = now.duration_since(self.preview_origin).as_secs_f32();
                 Task::none()
             }
             Message::DeleteSavedPreset(index) => {
@@ -1167,6 +1216,14 @@ impl App {
                 .collect(),
             PaintMode::Key => vec![(row, column)],
         }
+    }
+
+    /// Whether the lighting tab is showing an animation that needs redrawing.
+    pub fn previews_animation(&self) -> bool {
+        self.tab == Tab::Lighting
+            && !self.hidden
+            && self.lighting.effect == LightingEffect::Custom
+            && self.lighting.animation.is_some()
     }
 
     fn set_edited_color(&mut self, rgb: [u8; 3]) {
@@ -2027,6 +2084,7 @@ mod tests {
             vec![SavedPreset {
                 name: "Calm".into(),
                 frame: ocean,
+                animation: None,
             }]
         );
     }
@@ -2037,6 +2095,7 @@ mod tests {
             saved_presets: vec![SavedPreset {
                 name: "Mine".into(),
                 frame: solid_frame([4, 5, 6]),
+                animation: None,
             }],
             ..App::default()
         };
@@ -2115,6 +2174,44 @@ mod tests {
         app.lighting.color = Some([1, 2, 3]);
         let _ = app.update(Message::CopyHex);
         assert_eq!(app.copied_hex.as_deref(), Some("#010203"));
+    }
+
+    #[test]
+    fn picking_an_animation_keeps_its_speed_and_presets_keep_the_animation() {
+        let mut app = App::default();
+        let _ = app.update(Message::LightFramePreset("wow-druid"));
+        let _ = app.update(Message::LightingAnimation(Some(AnimationKind::Breathe)));
+        let _ = app.update(Message::LightingSpeed(99));
+        assert_eq!(
+            app.lighting.animation,
+            Some(Animation {
+                kind: AnimationKind::Breathe,
+                speed: SPEED_MAX
+            })
+        );
+        let _ = app.update(Message::LightingAnimation(Some(AnimationKind::Wave)));
+        assert_eq!(app.lighting.animation.unwrap().speed, SPEED_MAX);
+        let _ = app.update(Message::LightFramePreset("wow-mage"));
+        assert_eq!(
+            app.lighting.animation.map(|a| a.kind),
+            Some(AnimationKind::Wave)
+        );
+        let _ = app.update(Message::LightingAnimation(None));
+        assert_eq!(app.lighting.animation, None);
+    }
+
+    #[test]
+    fn the_preview_ticks_only_for_an_animated_frame_on_the_lighting_tab() {
+        let mut app = App {
+            tab: Tab::Lighting,
+            ..App::default()
+        };
+        let _ = app.update(Message::LightFramePreset("ocean"));
+        assert!(!app.previews_animation());
+        let _ = app.update(Message::LightingAnimation(Some(AnimationKind::Rain)));
+        assert!(app.previews_animation());
+        app.tab = Tab::Keys;
+        assert!(!app.previews_animation());
     }
 
     #[test]

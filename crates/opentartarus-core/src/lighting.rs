@@ -192,6 +192,7 @@ mod tests {
             brightness: 80,
             color: Some([0, 180, 255]),
             frame: None,
+            animation: None,
         };
         c.apply(&l).unwrap();
         assert_eq!(c.last.unwrap().color, Some([0, 180, 255]));
@@ -254,6 +255,7 @@ mod tests {
             brightness: 80,
             color: Some([9, 9, 9]),
             frame: Some(frame),
+            animation: None,
         };
         assert_eq!(lighting.main_color(), Some([200, 0, 50]));
         let plain = Lighting {
@@ -273,6 +275,7 @@ mod tests {
                 brightness: 80,
                 color: None,
                 frame: None,
+                animation: None,
             })
             .unwrap_err();
         assert_eq!(err, ErrorCode::Lighting);
@@ -285,6 +288,7 @@ mod tests {
             brightness: 40,
             color: None,
             frame: None,
+            animation: None,
         }
     }
 

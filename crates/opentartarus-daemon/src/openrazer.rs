@@ -45,13 +45,25 @@ impl LightingClient for OpenRazerClient {
         let vid = self.vid;
         let pid = self.pid;
         let lighting = &frame_or_static(lighting, pid);
+        crate::animator::animator().stop();
         let dbus_ok = off_tokio(|| {
             session_has_openrazer_blocking() && apply_via_dbus(lighting, vid, pid).is_ok()
         });
-        if dbus_ok {
-            return Ok(());
+        let applied = if dbus_ok {
+            Ok(())
+        } else {
+            apply_via_sysfs(lighting, vid, pid)
+        };
+        // The still frame and the brightness are set above; an animation
+        // then takes over drawing the frame.
+        if let (Ok(()), Some(frame), Some(animation)) =
+            (&applied, &lighting.frame, animation_of(lighting))
+        {
+            if let Some(node) = find_sysfs_node(vid, pid) {
+                crate::animator::animator().play(node, frame.clone(), animation);
+            }
         }
-        apply_via_sysfs(lighting, vid, pid)
+        applied
     }
 
     fn available(&self) -> bool {
@@ -77,8 +89,17 @@ fn frame_or_static(lighting: &Lighting, pid: Option<u16>) -> Lighting {
         effect: LightingEffect::Static,
         color: Some(lighting.main_color().unwrap_or(FALLBACK_RGB)),
         frame: None,
+        animation: None,
         ..lighting.clone()
     }
+}
+
+/// The animation to play, if this lighting has one that can play.
+fn animation_of(lighting: &Lighting) -> Option<opentartarus_core::animation::Animation> {
+    if lighting.effect != LightingEffect::Custom {
+        return None;
+    }
+    lighting.animation.filter(|animation| animation.is_valid())
 }
 
 fn off_tokio<T: Send>(f: impl FnOnce() -> T + Send) -> T {
@@ -388,6 +409,7 @@ mod tests {
             brightness: 70,
             color: None,
             frame: Some(frame),
+            animation: None,
         };
         let kept = frame_or_static(&custom, Some(USB_PID_TARTARUS_V2_PRO));
         assert_eq!(kept, custom);
@@ -397,6 +419,27 @@ mod tests {
         assert_eq!(flat.brightness, 70);
         let unknown = frame_or_static(&custom, None);
         assert_eq!(unknown.effect, LightingEffect::Static);
+    }
+
+    #[test]
+    fn only_a_custom_frame_animates() {
+        use opentartarus_core::animation::{Animation, AnimationKind};
+        let mut lighting = Lighting {
+            effect: LightingEffect::Custom,
+            brightness: 80,
+            color: None,
+            frame: Some(opentartarus_core::lighting::solid_frame([1, 2, 3])),
+            animation: Some(Animation::new(AnimationKind::Breathe)),
+        };
+        assert!(animation_of(&lighting).is_some());
+        lighting.effect = LightingEffect::Static;
+        assert!(animation_of(&lighting).is_none());
+        lighting.effect = LightingEffect::Custom;
+        lighting.animation = Some(Animation {
+            kind: AnimationKind::Breathe,
+            speed: 0,
+        });
+        assert!(animation_of(&lighting).is_none());
     }
 
     #[test]

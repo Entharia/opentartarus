@@ -168,6 +168,7 @@ mod tests {
             brightness,
             color,
             frame: None,
+            animation: None,
         }
     }
 

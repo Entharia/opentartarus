@@ -281,10 +281,12 @@ mod tests {
         let good = SavedPreset {
             name: "Raid".into(),
             frame: vec![vec![[1, 2, 3]; 6]; 5],
+            animation: None,
         };
         let broken = SavedPreset {
             name: "".into(),
             frame: Vec::new(),
+            animation: None,
         };
         write_saved_presets(&paths, &[good.clone(), broken]).unwrap();
         assert_eq!(read_saved_presets(&paths), vec![good]);

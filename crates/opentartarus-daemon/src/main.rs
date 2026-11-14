@@ -818,11 +818,31 @@ fn handle_physical_event<L: LightingClient>(
             }
         }
     }
+    if ev.value == KEY_DOWN {
+        note_press_for_lighting(&ev);
+    }
     let mut clock = SystemClock;
     match remap_physical_event(state, sink, epoch, ev, &mut clock) {
         Some(Ok(id)) => emit_event(events, EventMethod::ProfileApplied, json!({ "id": id })),
         Some(Err(err)) => log::write(&err.log_line(None)),
         None => {}
+    }
+}
+
+/// Tells the lighting animations which V2 Pro face key went down.
+fn note_press_for_lighting(ev: &RawEvent) {
+    use opentartarus_core::keymap::{KeyMap, KEY_PRESS_QUALIFIER};
+    use std::sync::OnceLock;
+    if DeviceModel::from_usb_pid(ev.pid) != Some(DeviceModel::V2Pro) {
+        return;
+    }
+    static V2_PRO_KEYS: OnceLock<KeyMap> = OnceLock::new();
+    let keys = V2_PRO_KEYS.get_or_init(|| KeyMap::for_model(DeviceModel::V2Pro));
+    let position = keys
+        .get(ev.ev_type, ev.code, KEY_PRESS_QUALIFIER)
+        .and_then(opentartarus_core::labels::v2_pro_grid_position);
+    if let Some((row, column)) = position {
+        opentartarus_daemon::animator::animator().key_pressed(row, column);
     }
 }
 

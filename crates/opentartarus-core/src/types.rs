@@ -503,6 +503,9 @@ pub struct Lighting {
     pub color: Option<[u8; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<LightFrame>,
+    /// Moves a custom frame. Ignored by the other effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<crate::animation::Animation>,
 }
 
 impl Lighting {

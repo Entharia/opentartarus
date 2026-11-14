@@ -14,6 +14,8 @@ pub const SAVED_NAME_MAX_LEN: usize = 32;
 pub struct SavedPreset {
     pub name: String,
     pub frame: LightFrame,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<crate::animation::Animation>,
 }
 
 impl SavedPreset {
@@ -23,6 +25,7 @@ impl SavedPreset {
             && name.chars().count() <= SAVED_NAME_MAX_LEN
             && self.frame.len() <= FRAME_ROWS
             && self.frame.iter().all(|row| row.len() <= FRAME_COLUMNS)
+            && self.animation.map_or(true, |a| a.is_valid())
     }
 }
 
@@ -626,14 +629,17 @@ mod tests {
         let a = SavedPreset {
             name: "Raid".into(),
             frame: vec![vec![[1, 1, 1]]],
+            animation: None,
         };
         let b = SavedPreset {
             name: "Arena".into(),
             frame: vec![vec![[2, 2, 2]]],
+            animation: None,
         };
         let a2 = SavedPreset {
             name: "raid".into(),
             frame: vec![vec![[3, 3, 3]]],
+            animation: None,
         };
         let list = with_saved(with_saved(Vec::new(), a), b.clone());
         let list = with_saved(list, a2.clone());
@@ -645,6 +651,7 @@ mod tests {
         let ok = SavedPreset {
             name: "Mine".into(),
             frame: preset_by_id("ocean").unwrap().frame(),
+            animation: None,
         };
         assert!(ok.is_valid());
         let unnamed = SavedPreset {

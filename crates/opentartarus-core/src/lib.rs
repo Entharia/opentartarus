@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod binpath;
 pub mod codec;
 pub mod constants;

@@ -8,6 +8,7 @@ use crate::view::widgets::{
 };
 use iced::widget::{button, column, container, row, scrollable, slider, text, text_input, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
+use opentartarus_core::animation::{render, AnimationKind, Press, SPEED_MAX, SPEED_MIN};
 use opentartarus_core::labels::{v2_pro_key_number, V2_PRO_ROWS};
 use opentartarus_core::light_presets::{
     preset_by_id, preset_for_frame, LightPreset, PresetGroup, PRESETS,
@@ -72,11 +73,50 @@ pub fn effect_swatch_color(effect: LightingEffect, current: Option<[u8; 3]>) -> 
     }
 }
 
+/// How often the preview pretends a key was pressed, for the animations
+/// that react to presses, and how many recent presses it keeps.
+const PREVIEW_PRESS_EVERY_SECS: f32 = 0.7;
+const PREVIEW_PRESSES: usize = 3;
+
+/// Made-up presses for the preview: a different face key every so often.
+fn preview_presses(t: f32) -> Vec<Press> {
+    let keys: Vec<(usize, usize)> = V2_PRO_ROWS
+        .iter()
+        .enumerate()
+        .flat_map(|(row, keys)| (0..keys.len()).map(move |column| (row, column)))
+        .collect();
+    let latest = (t / PREVIEW_PRESS_EVERY_SECS).floor() as i64;
+    (0..PREVIEW_PRESSES as i64)
+        .map(|back| latest - back)
+        .filter(|tick| *tick >= 0)
+        .map(|tick| {
+            let pick = (tick as usize).wrapping_mul(7919).wrapping_add(13) % keys.len();
+            let (row, column) = keys[pick];
+            Press {
+                row,
+                column,
+                age: t - tick as f32 * PREVIEW_PRESS_EVERY_SECS,
+            }
+        })
+        .collect()
+}
+
 /// What every LED shows for the current effect, for the pad picture.
 pub fn preview_frame(app: &App) -> LightFrame {
     let lighting = &app.lighting;
     match lighting.effect {
-        LightingEffect::Custom => lighting.frame.clone().unwrap_or_default(),
+        LightingEffect::Custom => {
+            let frame = lighting.frame.clone().unwrap_or_default();
+            match lighting.animation {
+                Some(animation) => render(
+                    &frame,
+                    animation,
+                    app.preview_time,
+                    &preview_presses(app.preview_time),
+                ),
+                None => frame,
+            }
+        }
         LightingEffect::Wave | LightingEffect::Spectrum => preset_by_id(CYCLING_PREVIEW_PRESET)
             .map(LightPreset::frame)
             .unwrap_or_default(),
@@ -191,6 +231,61 @@ fn effect_chips(app: &App) -> Element<'_, Message> {
     column![section_label(theme::LABEL_EFFECT), grid]
         .spacing(theme::SPACE_SM)
         .into()
+}
+
+fn animation_chip(app: &App, kind: Option<AnimationKind>) -> Element<'_, Message> {
+    let selected = app.lighting.animation.map(|a| a.kind) == kind;
+    let name = kind.map_or(theme::ANIMATION_NONE, AnimationKind::name);
+    let style = if selected {
+        selected_effect_button
+    } else {
+        quiet_button
+    };
+    button(container(text(name).size(theme::TEXT_SMALL)).center_x(Length::Fill))
+        .width(Length::Fill)
+        .padding([theme::SPACE_SM, theme::SPACE_MD])
+        .on_press(Message::LightingAnimation(kind))
+        .style(style)
+        .into()
+}
+
+/// The custom frame's animation: still or one of the kinds, and its speed.
+fn animation_control(app: &App) -> Element<'_, Message> {
+    let choices: Vec<Option<AnimationKind>> = std::iter::once(None)
+        .chain(AnimationKind::ALL.into_iter().map(Some))
+        .collect();
+    let mut grid = column![].spacing(theme::SPACE_SM);
+    for chunk in choices.chunks(theme::EFFECT_GRID_COLUMNS) {
+        let mut line = row![].spacing(theme::SPACE_SM);
+        for kind in chunk {
+            line = line.push(animation_chip(app, *kind));
+        }
+        for _ in chunk.len()..theme::EFFECT_GRID_COLUMNS {
+            line = line.push(Space::with_width(Length::Fill));
+        }
+        grid = grid.push(line);
+    }
+    let mut section = column![section_label(theme::LABEL_ANIMATION), grid].spacing(theme::SPACE_SM);
+    if let Some(animation) = app.lighting.animation {
+        if animation.kind.uses_presses() {
+            section = section.push(
+                text(theme::ANIMATION_PRESS_HINT)
+                    .size(theme::TEXT_SMALL)
+                    .color(theme::COLOR_TEXT_FAINT),
+            );
+        }
+        section = section
+            .push(labelled(
+                theme::LABEL_SPEED.to_string(),
+                format!("{} / {}", animation.speed, SPEED_MAX),
+            ))
+            .push(slider(
+                SPEED_MIN..=SPEED_MAX,
+                animation.speed,
+                Message::LightingSpeed,
+            ));
+    }
+    section.into()
 }
 
 /// A label on the left with its value on the right, above a control.
@@ -405,6 +500,9 @@ pub fn lighting_tab(app: &App) -> Element<'_, Message> {
         let mut controls = column![effect_chips(app), brightness_control(app)]
             .spacing(theme::SPACE_XL)
             .max_width(theme::LIGHTING_CONTROLS_WIDTH);
+        if custom {
+            controls = controls.push(animation_control(app));
+        }
         if uses_color(app.lighting.effect) || custom {
             controls = controls.push(color_control(app));
         }
@@ -644,6 +742,20 @@ mod tests {
             openrazer: true,
             ..App::default()
         }
+    }
+
+    #[test]
+    fn preview_presses_land_on_face_keys_and_age_forward() {
+        let presses = preview_presses(5.0);
+        assert_eq!(presses.len(), PREVIEW_PRESSES);
+        for press in &presses {
+            assert!(press.column < V2_PRO_ROWS[press.row].len());
+            assert!(press.age >= 0.0);
+        }
+        assert!(
+            preview_presses(0.1).len() == 1,
+            "no presses before the start"
+        );
     }
 
     #[test]

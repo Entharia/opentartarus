@@ -145,7 +145,7 @@ pub const BTN_EXTRA: u16 = 276;
 
 const WHEEL_UP: i32 = 1;
 const WHEEL_DOWN: i32 = -1;
-const KEY_PRESS_QUALIFIER: i32 = 1;
+pub const KEY_PRESS_QUALIFIER: i32 = 1;
 
 /// Keypad plus wheel/mode fixture shared by production maps and tests.
 /// Qualifier is applied in [`KeyMap`]: press `1` for keys, `+1`/`-1` for wheel.

@@ -1,3 +1,4 @@
+pub mod animator;
 pub mod device;
 pub mod handler;
 pub mod hypershift;

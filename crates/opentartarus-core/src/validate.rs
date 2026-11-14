@@ -247,6 +247,9 @@ fn validate_lighting(lighting: &Lighting) -> Result<(), ErrorCode> {
             return Err(ErrorCode::InvalidProfile);
         }
     }
+    if lighting.animation.is_some_and(|a| !a.is_valid()) {
+        return Err(ErrorCode::InvalidProfile);
+    }
     Ok(())
 }
 
@@ -410,6 +413,13 @@ mod tests {
         p.lighting.frame = Some(vec![vec![[0, 0, 0]; FRAME_COLUMNS + 1]]);
         assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
         p.lighting.frame = Some(vec![vec![[0, 0, 0]]; FRAME_ROWS + 1]);
+        assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
+        p.lighting.frame = Some(crate::lighting::solid_frame([1, 2, 3]));
+        let mut animation = crate::animation::Animation::new(crate::animation::AnimationKind::Rain);
+        p.lighting.animation = Some(animation);
+        assert!(p.validate().is_ok());
+        animation.speed = 0;
+        p.lighting.animation = Some(animation);
         assert_eq!(p.validate().unwrap_err(), ErrorCode::InvalidProfile);
     }
 
